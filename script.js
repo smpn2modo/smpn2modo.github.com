@@ -1,0 +1,3419 @@
+/* ============================================================
+   MPI Sistem Komputer — Menyelam ke Dalam Mesin Digital
+   Main Script (Refined & Unified SPA Controller)
+   ============================================================ */
+
+// ==================== CONFIG INTEGRATION ====================
+
+function applyConfig() {
+  const cfg = window.MPI_CONFIG;
+  if (!cfg) return;
+
+  // Apply Background & Softening Overlay
+  const bgEl = document.getElementById('classroom-bg');
+  if (bgEl && cfg.background) {
+    if (cfg.background.image) {
+      bgEl.style.backgroundImage = `url('${cfg.background.image}')`;
+      bgEl.style.backgroundSize = cfg.background.size || 'cover';
+      bgEl.style.backgroundPosition = cfg.background.position || 'center center';
+    } else {
+      bgEl.classList.add('use-svg');
+    }
+
+    // Set overlay to soften background image
+    let overlayColor = cfg.background.overlay_color;
+    if (!overlayColor && cfg.background.overlay_opacity !== undefined) {
+      overlayColor = `rgba(255, 255, 255, ${cfg.background.overlay_opacity})`;
+    }
+    if (overlayColor) {
+      bgEl.style.setProperty('--bg-overlay', overlayColor);
+    }
+  }
+
+  // Apply Logos if elements exist
+  const leftLogo = document.getElementById('logo-kemendikdasmen-cover');
+  if (leftLogo && cfg.logos && cfg.logos.header_left) {
+    leftLogo.src = cfg.logos.header_left;
+  }
+  const rightLogo = document.getElementById('logo-sobat-cover');
+  if (rightLogo && cfg.logos && cfg.logos.header_right) {
+    rightLogo.src = cfg.logos.header_right;
+  }
+
+  // Footer Logos
+  if (cfg.logos && Array.isArray(cfg.logos.footer_logos) && cfg.logos.footer_logos.length > 0) {
+    const kLogos = document.querySelectorAll('#kredit-logos img');
+    cfg.logos.footer_logos.forEach((src, idx) => {
+      if (kLogos[idx] && src) kLogos[idx].src = src;
+    });
+  }
+
+  // Apply Developer Photos if configured
+  const devPhoto1 = document.querySelector('#dev-photo-1 img');
+  if (devPhoto1 && cfg.assets && cfg.assets.dev_photo_1) {
+    devPhoto1.src = cfg.assets.dev_photo_1;
+  }
+  const devPhoto2 = document.querySelector('#dev-photo-2 img');
+  if (devPhoto2 && cfg.assets && cfg.assets.dev_photo_2) {
+    devPhoto2.src = cfg.assets.dev_photo_2;
+  }
+
+  // Apply Video Source if configured
+  const mainVideo = document.getElementById('main-video');
+  if (mainVideo && cfg.assets && cfg.assets.video_src) {
+    const videoSource = document.getElementById('main-video-source') || mainVideo.querySelector('source');
+    if (videoSource) {
+      if (videoSource.getAttribute('src') !== cfg.assets.video_src) {
+        videoSource.src = cfg.assets.video_src;
+        mainVideo.load();
+      }
+    } else if (mainVideo.getAttribute('src') !== cfg.assets.video_src) {
+      mainVideo.src = cfg.assets.video_src;
+      mainVideo.load();
+    }
+  }
+
+  // Apply Testing Page Indicator
+  updateTestingIndicator(currentPage);
+  updateTopControls(currentPage);
+}
+
+// ==================== ZOOM CONTROLS ENGINE ====================
+function isTouchTabletDevice() {
+  const isCoarse = window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+  const hasTouch = (navigator.maxTouchPoints > 0) || ('ontouchstart' in window);
+  const ua = navigator.userAgent;
+  const isTabletUA = /iPad|Tablet|SM-T|SM-X|Tab|Android(?!.*Mobile)/i.test(ua) || 
+                     (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+  return (isCoarse || isTabletUA) && hasTouch;
+}
+
+function getOptimalZoom() {
+  const isTablet = isTouchTabletDevice();
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  const isTabletShortLandscape = isTablet && (w >= 801 && h <= 720);
+
+  // Jika ini komputer/laptop (bukan touchscreen tablet):
+  if (!isTablet) {
+    const saved = localStorage.getItem('mpi_zoom_level');
+    // Jika di komputer sempat tersimpan '0.67' akibat auto-init tablet sebelumnya, pulihkan ke 1.0
+    if (saved === '0.67') {
+      try {
+        localStorage.removeItem('mpi_zoom_level');
+        localStorage.removeItem('mpi_zoom_v10_init');
+      } catch (e) {}
+      return 1.0;
+    }
+    return saved !== null ? (parseFloat(saved) || 1.0) : 1.0;
+  }
+
+  // Jika ini tablet landscape pendek:
+  const tabletInit = localStorage.getItem('mpi_tablet_zoom_v12');
+  if (isTabletShortLandscape && !tabletInit) {
+    try {
+      localStorage.setItem('mpi_tablet_zoom_v12', 'true');
+      localStorage.setItem('mpi_zoom_level', '0.67');
+    } catch (e) {}
+    return 0.67;
+  }
+
+  const saved = localStorage.getItem('mpi_zoom_level');
+  if (saved !== null) {
+    return parseFloat(saved) || 1.0;
+  }
+
+  return isTabletShortLandscape ? 0.67 : 1.0;
+}
+
+let currentZoom = getOptimalZoom();
+
+function setAppZoom(zoomLevel) {
+  zoomLevel = Math.round(zoomLevel * 100) / 100;
+  if (zoomLevel < 0.50) zoomLevel = 0.50;
+  if (zoomLevel > 1.30) zoomLevel = 1.30;
+  currentZoom = zoomLevel;
+
+  try {
+    localStorage.setItem('mpi_zoom_level', currentZoom.toString());
+  } catch (e) {}
+
+  const zoomPct = Math.round(currentZoom * 100);
+
+  // Apply zoom natively to body (Chrome, Edge, Safari, Opera, modern Firefox)
+  document.body.style.zoom = currentZoom;
+  document.documentElement.style.setProperty('--app-zoom', currentZoom);
+
+  // Toggle class for dynamic width expansion when zoom < 100%
+  if (currentZoom < 1.0) {
+    document.body.classList.add('zoom-sub-100');
+    document.documentElement.classList.add('zoom-sub-100');
+  } else {
+    document.body.classList.remove('zoom-sub-100');
+    document.documentElement.classList.remove('zoom-sub-100');
+  }
+
+  // Update UI indicators
+  const zoomTexts = document.querySelectorAll('.zoom-level-text');
+  zoomTexts.forEach(el => {
+    el.textContent = zoomPct + '%';
+    el.title = 'Zoom: ' + zoomPct + '%. Klik untuk reset.';
+  });
+
+  // Re-draw dynamic lines after zoom change
+  setTimeout(() => {
+    if (typeof drawMatchP8Lines === 'function' && currentPage === 'tarik-jawaban') {
+      drawMatchP8Lines();
+    }
+    const secC = document.getElementById('eval-section-C');
+    if (secC && secC.classList.contains('active') && typeof drawMatchLines === 'function') {
+      drawMatchLines();
+    }
+  }, 100);
+}
+
+function zoomIn() {
+  // Snap ke kelipatan 5% berikutnya (misal dari 67% -> 70% -> 75%)
+  const next = Math.round((Math.ceil((currentZoom + 0.001) / 0.05) * 0.05) * 100) / 100;
+  setAppZoom(next);
+}
+
+function zoomOut() {
+  // Snap ke kelipatan 5% sebelumnya (misal dari 67% -> 65% -> 60%)
+  const next = Math.round((Math.floor((currentZoom - 0.001) / 0.05) * 0.05) * 100) / 100;
+  setAppZoom(next);
+}
+
+function resetZoom() {
+  const isTablet = isTouchTabletDevice();
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  const defaultZoom = (isTablet && w >= 801 && h <= 720) ? 0.67 : 1.0;
+  setAppZoom(defaultZoom);
+}
+
+// ==================== FONT SIZE CONTROLS ENGINE ====================
+let currentFontScale = parseFloat(localStorage.getItem('mpi_font_scale')) || 1.0;
+
+function setAppFontScale(scale) {
+  scale = Math.round(scale * 100) / 100;
+  if (scale < 0.70) scale = 0.70;
+  if (scale > 1.50) scale = 1.50;
+  currentFontScale = scale;
+
+  try {
+    localStorage.setItem('mpi_font_scale', currentFontScale.toString());
+  } catch (e) {}
+
+  const fontPct = Math.round(currentFontScale * 100);
+  document.documentElement.style.setProperty('--font-scale', currentFontScale);
+
+  const fontTexts = document.querySelectorAll('.font-level-text');
+  fontTexts.forEach(el => {
+    el.textContent = `${fontPct}%`;
+    el.title = fontPct === 100 ? 'Ukuran Teks Normal (100%)' : 'Klik untuk Reset Ukuran Teks (100%)';
+  });
+
+  // Re-draw dynamic lines if text size changes card heights
+  setTimeout(() => {
+    if (typeof drawMatchP8Lines === 'function' && currentPage === 'tarik-jawaban') {
+      drawMatchP8Lines();
+    }
+    const secC = document.getElementById('eval-section-C');
+    if (secC && secC.classList.contains('active') && typeof drawMatchLines === 'function') {
+      drawMatchLines();
+    }
+  }, 60);
+}
+
+function fontIn() {
+  setAppFontScale(currentFontScale + 0.05);
+}
+
+function fontOut() {
+  setAppFontScale(currentFontScale - 0.05);
+}
+
+function resetFont() {
+  setAppFontScale(1.0);
+}
+
+// ==================== NAVIGATION (SPA) ====================
+
+const MATERI_SUBPAGES = ['materi-1', 'tarik-jawaban', 'materi-2', 'video', 'materi-3', 'materi-4'];
+
+function updateTopControls(pageId) {
+  const topControls = document.getElementById('top-controls-right');
+  const btnMateri = document.getElementById('btn-top-materi');
+
+  if (btnMateri) {
+    if (MATERI_SUBPAGES.includes(pageId)) {
+      btnMateri.style.display = 'inline-flex';
+    } else {
+      btnMateri.style.display = 'none';
+    }
+  }
+
+  if (topControls) {
+    if (pageId === 'cover') {
+      topControls.classList.add('on-cover');
+    } else {
+      topControls.classList.remove('on-cover');
+    }
+  }
+}
+
+const PAGE_INDEX_MAP = {
+  'cover': 1,
+  'menu': 2,
+  'petunjuk': 3,
+  'tujuan': 4,
+  'materi-list': 5,
+  'materi-1': 6,
+  'tarik-jawaban': 7,
+  'materi-2': 8,
+  'video': 9,
+  'materi-3': 10,
+  'materi-4': 11,
+  'permainan-intro': 12,
+  'permainan': 13,
+  'latihan-intro': 14,
+  'latihan': 15,
+  'rangkuman': 16,
+  'referensi': 17,
+  'prompt-ai': 18,
+  'pengembang': 19,
+  'kutipan': 20,
+  'kredit': 21
+};
+
+function updateTestingIndicator(pageId) {
+  const cfg = window.MPI_CONFIG;
+  if (!cfg || (cfg.is_testing !== 1 && cfg.is_testing !== true)) {
+    const el = document.getElementById('testing-page-indicator');
+    if (el) el.style.display = 'none';
+    return;
+  }
+
+  let indicator = document.getElementById('testing-page-indicator');
+  if (!indicator) {
+    indicator = document.createElement('div');
+    indicator.id = 'testing-page-indicator';
+    indicator.className = 'testing-page-indicator';
+    document.body.appendChild(indicator);
+  }
+
+  const pageNum = PAGE_INDEX_MAP[pageId] || '?';
+  indicator.innerHTML = `<span>Halaman ${pageNum} / 21</span>`;
+  indicator.style.display = 'block';
+}
+
+const LINEAR_PAGES = [
+  'cover', 'menu', 'petunjuk', 'tujuan', 'materi-list',
+  'materi-1', 'tarik-jawaban', 'materi-2', 'video', 'materi-3', 'materi-4',
+  'permainan-intro', 'permainan', 'latihan-intro', 'latihan',
+  'rangkuman', 'referensi', 'prompt-ai', 'pengembang', 'kutipan', 'kredit'
+];
+
+let currentPage = 'cover';
+
+function goToPage(pageId) {
+  const oldPage = document.querySelector('.page.active');
+  const newPage = document.getElementById('page-' + pageId);
+  if (!newPage) return;
+
+  if (oldPage && oldPage.id !== 'page-' + pageId) {
+    oldPage.classList.remove('active');
+  }
+  newPage.classList.add('active');
+  currentPage = pageId;
+
+  // Stop all playing videos and audios when navigating to any page
+  document.querySelectorAll('video').forEach(v => {
+    try {
+      v.pause();
+    } catch (e) {}
+  });
+  document.querySelectorAll('audio').forEach(a => {
+    try {
+      a.pause();
+    } catch (e) {}
+  });
+
+  // Update Testing Page Indicator if is_testing is active
+  updateTestingIndicator(pageId);
+  updateTopControls(pageId);
+
+  // Reset scroll to top
+  newPage.scrollTop = 0;
+  const scrollables = newPage.querySelectorAll('.scrollable, .content-box, .intro-card-box');
+  scrollables.forEach(el => el.scrollTop = 0);
+
+  // Update global compound navigation labels across all pages
+  updateGlobalNavButtons(pageId);
+
+  // Lazy initialize interactive modules on page entry
+  if (pageId === 'tarik-jawaban') initMatchP8();
+  if (pageId === 'video') initVideo();
+  if (pageId === 'permainan') initPacketCommanderGame();
+  if (pageId === 'latihan') {
+    const activeSec = document.querySelector('.eval-section.active');
+    if (!activeSec || activeSec.id === 'eval-section-recap') {
+      startEval();
+    }
+    const scrollHint = document.getElementById('eval-floating-scroll-hint');
+    if (scrollHint) {
+      const secA = document.getElementById('eval-section-A');
+      if (secA && secA.classList.contains('active')) {
+        scrollHint.classList.remove('hidden');
+      } else {
+        scrollHint.classList.add('hidden');
+      }
+    }
+  }
+  if (pageId === 'rangkuman') loadRefleksi();
+}
+
+// ==================== GLOBAL COMPOUND NAVIGATION MAP ====================
+const JARINGAN_PAGE_NAV_MAP = {
+  'menu': {
+    prevText: 'Cover / Beranda',
+    prevSub: 'HALAMAN SEBELUMNYA',
+    nextText: 'Petunjuk Penggunaan',
+    nextSub: 'HALAMAN BERIKUTNYA'
+  },
+  'petunjuk': {
+    prevText: 'Menu Utama',
+    prevSub: 'HALAMAN SEBELUMNYA',
+    nextText: 'Tujuan Pembelajaran',
+    nextSub: 'HALAMAN BERIKUTNYA'
+  },
+  'tujuan': {
+    prevText: 'Petunjuk Penggunaan',
+    prevSub: 'HALAMAN SEBELUMNYA',
+    nextText: 'Daftar Pilihan Materi',
+    nextSub: 'HALAMAN BERIKUTNYA'
+  },
+  'materi-list': {
+    prevText: 'Tujuan Pembelajaran',
+    prevSub: 'HALAMAN SEBELUMNYA',
+    nextText: 'Materi 1: Sistem Komputer & Segitiga Emas',
+    nextSub: 'HALAMAN BERIKUTNYA'
+  },
+  'materi-1': {
+    prevText: 'Daftar Pilihan Materi',
+    prevSub: 'HALAMAN SEBELUMNYA',
+    nextText: 'Latihan: Menjodohkan Hardware',
+    nextSub: 'HALAMAN BERIKUTNYA'
+  },
+  'tarik-jawaban': {
+    prevText: 'Materi 1: Sistem Komputer & Segitiga Emas',
+    prevSub: 'HALAMAN SEBELUMNYA',
+    nextText: 'Materi 2: Perangkat Keras & Motherboard',
+    nextSub: 'HALAMAN BERIKUTNYA'
+  },
+  'materi-2': {
+    prevText: 'Latihan: Menjodohkan Hardware',
+    prevSub: 'HALAMAN SEBELUMNYA',
+    nextText: 'Video: Simulasi Siklus CPU',
+    nextSub: 'HALAMAN BERIKUTNYA'
+  },
+  'video': {
+    prevText: 'Materi 2: Perangkat Keras & Motherboard',
+    prevSub: 'HALAMAN SEBELUMNYA',
+    nextText: 'Materi 3: Cara Kerja Komputer',
+    nextSub: 'HALAMAN BERIKUTNYA'
+  },
+  'materi-3': {
+    prevText: 'Video: Simulasi Siklus CPU',
+    prevSub: 'HALAMAN SEBELUMNYA',
+    nextText: 'Materi 4: Sistem Operasi',
+    nextSub: 'HALAMAN BERIKUTNYA'
+  },
+  'materi-4': {
+    prevText: 'Materi 3: Cara Kerja Komputer',
+    prevSub: 'HALAMAN SEBELUMNYA',
+    nextText: 'Pengantar Simulator Komputer',
+    nextSub: 'HALAMAN BERIKUTNYA'
+  },
+  'permainan-intro': {
+    prevText: 'Materi 4: Sistem Operasi',
+    prevSub: 'HALAMAN SEBELUMNYA',
+    nextText: 'Mulai Simulator Komputer',
+    nextSub: 'HALAMAN BERIKUTNYA'
+  },
+  'permainan': {
+    prevText: 'Pengantar Simulator',
+    prevSub: 'HALAMAN SEBELUMNYA',
+    nextText: 'Pengantar Latihan Evaluasi',
+    nextSub: 'HALAMAN BERIKUTNYA'
+  },
+  'latihan-intro': {
+    prevText: 'Simulator Sistem Komputer',
+    prevSub: 'HALAMAN SEBELUMNYA',
+    nextText: 'Mulai Latihan Evaluasi',
+    nextSub: 'HALAMAN BERIKUTNYA'
+  },
+  'latihan': {
+    prevText: 'Pengantar Latihan',
+    prevSub: 'HALAMAN SEBELUMNYA',
+    nextText: 'Rangkuman & Refleksi',
+    nextSub: 'HALAMAN BERIKUTNYA'
+  },
+  'rangkuman': {
+    prevText: 'Latihan Evaluasi',
+    prevSub: 'HALAMAN SEBELUMNYA',
+    nextText: 'Referensi & Daftar Pustaka',
+    nextSub: 'HALAMAN BERIKUTNYA'
+  },
+  'referensi': {
+    prevText: 'Rangkuman & Refleksi',
+    prevSub: 'HALAMAN SEBELUMNYA',
+    nextText: 'Dokumentasi Prompt AI',
+    nextSub: 'HALAMAN BERIKUTNYA'
+  },
+  'prompt-ai': {
+    prevText: 'Referensi & Daftar Pustaka',
+    prevSub: 'HALAMAN SEBELUMNYA',
+    nextText: 'Profil Pengembang',
+    nextSub: 'HALAMAN BERIKUTNYA'
+  },
+  'pengembang': {
+    prevText: 'Dokumentasi Prompt AI',
+    prevSub: 'HALAMAN SEBELUMNYA',
+    nextText: 'Motto / Kutipan Inspirasi',
+    nextSub: 'HALAMAN BERIKUTNYA'
+  },
+  'kutipan': {
+    prevText: 'Profil Pengembang',
+    prevSub: 'HALAMAN SEBELUMNYA',
+    nextText: 'Kredit Media & Penutup',
+    nextSub: 'HALAMAN BERIKUTNYA'
+  },
+  'kredit': {
+    prevText: 'Motto',
+    prevSub: 'HALAMAN SEBELUMNYA',
+    nextText: 'Kembali ke Beranda 🏠',
+    nextSub: 'SELESAI PEMBELAJARAN',
+    isFinish: true
+  }
+};
+
+function updateGlobalNavButtons(pageId) {
+  if (pageId === 'cover') return;
+
+  const navInfo = JARINGAN_PAGE_NAV_MAP[pageId];
+  if (!navInfo) return;
+
+  const pageEl = document.getElementById('page-' + pageId);
+  if (!pageEl) return;
+
+  // Left Nav Button & Label
+  const leftNav = pageEl.querySelector('.nav-bottom.left');
+  if (leftNav && navInfo.prevText) {
+    leftNav.classList.add('nav-materi-compound');
+    let labelEl = leftNav.querySelector('.nav-materi-label');
+    if (!labelEl) {
+      labelEl = document.createElement('div');
+      labelEl.className = 'nav-materi-label left';
+      labelEl.onclick = () => navPrev();
+      leftNav.appendChild(labelEl);
+    }
+    labelEl.innerHTML = `
+      <span class="nml-sub">${navInfo.prevSub || 'HALAMAN SEBELUMNYA'}</span>
+      <strong class="nml-main">${navInfo.prevText}</strong>
+    `;
+  }
+
+  // Right Nav Button & Label
+  const rightNav = pageEl.querySelector('.nav-bottom.right');
+  if (rightNav && navInfo.nextText) {
+    rightNav.classList.add('nav-materi-compound');
+    let labelEl = rightNav.querySelector('.nav-materi-label');
+    if (!labelEl) {
+      labelEl = document.createElement('div');
+      labelEl.className = 'nav-materi-label right';
+      labelEl.onclick = () => navNext();
+      rightNav.insertBefore(labelEl, rightNav.firstChild);
+    }
+    labelEl.innerHTML = `
+      <span class="nml-sub">${navInfo.nextSub || 'HALAMAN BERIKUTNYA'}</span>
+      <strong class="nml-main">${navInfo.nextText}</strong>
+    `;
+    if (navInfo.isFinish) {
+      labelEl.classList.add('finish');
+    } else {
+      labelEl.classList.remove('finish');
+    }
+  }
+}
+
+function navNext() {
+  const idx = LINEAR_PAGES.indexOf(currentPage);
+  if (idx === -1) return;
+  if (idx < LINEAR_PAGES.length - 1) {
+    goToPage(LINEAR_PAGES[idx + 1]);
+  }
+}
+
+function navPrev() {
+  const idx = LINEAR_PAGES.indexOf(currentPage);
+  if (idx === -1) return;
+  if (idx > 0) {
+    goToPage(LINEAR_PAGES[idx - 1]);
+  } else {
+    goToPage('materi-list');
+  }
+}
+
+
+// ==================== VIDEO ====================
+
+let videoInitialized = false;
+
+function initVideo() {
+  const video = document.getElementById('main-video');
+  const fallback = document.getElementById('video-fallback');
+  if (!video) return;
+
+  const cfg = window.MPI_CONFIG;
+  if (cfg && cfg.assets && cfg.assets.video_src) {
+    const source = document.getElementById('main-video-source') || video.querySelector('source');
+    if (source && source.getAttribute('src') !== cfg.assets.video_src) {
+      source.src = cfg.assets.video_src;
+      video.load();
+    } else if (!source && video.getAttribute('src') !== cfg.assets.video_src) {
+      video.src = cfg.assets.video_src;
+      video.load();
+    }
+  }
+
+  const source = video.querySelector('source');
+  const currentSrc = source ? (source.getAttribute('src') || source.src) : (video.getAttribute('src') || video.src);
+
+  if (!currentSrc || currentSrc.trim() === '') {
+    video.style.display = 'none';
+    if (fallback) fallback.style.display = 'block';
+    return;
+  }
+
+  if (!videoInitialized) {
+    videoInitialized = true;
+
+    const onVideoError = function() {
+      if (video.networkState === HTMLMediaElement.NETWORK_NO_SOURCE || video.error) {
+        video.style.display = 'none';
+        if (fallback) fallback.style.display = 'block';
+      }
+    };
+
+    const onVideoSuccess = function() {
+      video.style.display = 'block';
+      if (fallback) fallback.style.display = 'none';
+    };
+
+    video.addEventListener('error', onVideoError);
+    video.addEventListener('loadeddata', onVideoSuccess);
+    video.addEventListener('canplay', onVideoSuccess);
+    video.addEventListener('loadedmetadata', onVideoSuccess);
+  }
+
+  if (video.readyState >= 1) {
+    video.style.display = 'block';
+    if (fallback) fallback.style.display = 'none';
+  } else {
+    video.style.display = 'block';
+    if (fallback) fallback.style.display = 'none';
+  }
+}
+
+function seekVideo(seconds) {
+  const video = document.getElementById('main-video');
+  if (video) {
+    try {
+      video.currentTime = seconds;
+      video.play().catch(() => {});
+    } catch (e) {
+      console.warn('seekVideo error:', e);
+    }
+  }
+}
+
+// ==================== MENJODOHKAN ISTILAH (HALAMAN 8) ====================
+
+const MATCH_P8_DATA = [
+  { id: '1', term: 'CPU (Processor)', def: 'Otak pemroses instruksi utama komputer (berisi ALU dan Control Unit)' },
+  { id: '2', term: 'RAM (Memori Utama)', def: 'Memori kerja berkecepatan tinggi yang menyimpan data sementara (volatil)' },
+  { id: '3', term: 'SSD / Penyimpanan', def: 'Media penyimpanan data, program, dan OS secara permanen (non-volatil)' },
+  { id: '4', term: 'Motherboard', def: 'Papan sirkuit utama tempat seluruh komponen hardware saling terhubung' },
+  { id: '5', term: 'Perangkat I/O', def: 'Perangkat masukan & keluaran (seperti Keyboard, Mouse, dan Monitor)' },
+];
+
+const MATCH_P8_THEMES = {
+  '1': { color: '#0288d1', bg: '#e1f5fe', border: '#0288d1', label: '1' },
+  '2': { color: '#7b1fa2', bg: '#f3e5f5', border: '#8e24aa', label: '2' },
+  '3': { color: '#e65100', bg: '#fff3e0', border: '#fb8c00', label: '3' },
+  '4': { color: '#2e7d32', bg: '#e8f5e9', border: '#43a047', label: '4' },
+  '5': { color: '#c2185b', bg: '#fce4ec', border: '#d81b60', label: '5' },
+};
+
+let matchP8State = {
+  selectedLeft: null,
+  pairs: {} // { leftId: rightId }
+};
+let shuffledRightP8 = null;
+
+function initMatchP8() {
+  const leftCol = document.getElementById('match-left-p8');
+  const rightCol = document.getElementById('match-right-p8');
+  if (!leftCol || !rightCol) return;
+
+  leftCol.innerHTML = '';
+  rightCol.innerHTML = '';
+
+  if (!shuffledRightP8) {
+    shuffledRightP8 = [...MATCH_P8_DATA].sort(() => Math.random() - 0.5);
+  }
+
+  MATCH_P8_DATA.forEach(item => {
+    const el = document.createElement('div');
+    el.className = 'match-item';
+    el.id = `match-p8-left-${item.id}`;
+    el.dataset.id = item.id;
+    el.dataset.side = 'left';
+    el.onclick = (e) => {
+      if (e.target.closest('.match-unpair-btn')) {
+        e.stopPropagation();
+        unpairMatchP8(item.id);
+        return;
+      }
+      onMatchP8Click('left', item.id);
+    };
+    leftCol.appendChild(el);
+  });
+
+  shuffledRightP8.forEach(item => {
+    const el = document.createElement('div');
+    el.className = 'match-item';
+    el.id = `match-p8-right-${item.id}`;
+    el.dataset.id = item.id;
+    el.dataset.side = 'right';
+    el.onclick = (e) => {
+      if (e.target.closest('.match-unpair-btn')) {
+        e.stopPropagation();
+        const pairedLeft = Object.keys(matchP8State.pairs).find(k => matchP8State.pairs[k] === item.id);
+        if (pairedLeft) unpairMatchP8(pairedLeft);
+        return;
+      }
+      onMatchP8Click('right', item.id);
+    };
+    rightCol.appendChild(el);
+  });
+
+  renderMatchP8UI();
+}
+
+function renderMatchP8UI() {
+  MATCH_P8_DATA.forEach(item => {
+    const el = document.getElementById(`match-p8-left-${item.id}`);
+    if (!el) return;
+    const isSelected = matchP8State.selectedLeft === item.id;
+    const pairedRight = matchP8State.pairs[item.id];
+    const theme = MATCH_P8_THEMES[item.id] || MATCH_P8_THEMES['1'];
+
+    el.className = 'match-item' + (isSelected ? ' selected' : '') + (pairedRight ? ' matched' : '');
+    if (pairedRight) {
+      el.style.setProperty('--pair-color', theme.color);
+      el.style.setProperty('--pair-bg', theme.bg);
+      el.style.setProperty('--pair-border', theme.border);
+      el.innerHTML = `
+        <div class="match-item-content">
+          <span><strong>${item.term}</strong></span>
+        </div>
+        <span class="match-badge">🔗 #${theme.label} <span class="match-unpair-btn" title="Batalkan pasangan">✕</span></span>
+        <span class="match-anchor-dot"></span>
+      `;
+    } else {
+      el.removeAttribute('style');
+      el.innerHTML = `
+        <div class="match-item-content">
+          <span><strong>${item.term}</strong></span>
+        </div>
+        <span class="match-anchor-dot"></span>
+      `;
+    }
+  });
+
+  if (shuffledRightP8) {
+    shuffledRightP8.forEach(item => {
+      const el = document.getElementById(`match-p8-right-${item.id}`);
+      if (!el) return;
+      const pairedLeft = Object.keys(matchP8State.pairs).find(k => matchP8State.pairs[k] === item.id);
+      const theme = pairedLeft ? (MATCH_P8_THEMES[pairedLeft] || MATCH_P8_THEMES['1']) : null;
+
+      el.className = 'match-item' + (pairedLeft ? ' matched' : '');
+      if (pairedLeft && theme) {
+        el.style.setProperty('--pair-color', theme.color);
+        el.style.setProperty('--pair-bg', theme.bg);
+        el.style.setProperty('--pair-border', theme.border);
+        el.innerHTML = `
+          <span class="match-anchor-dot"></span>
+          <span class="match-badge">🔗 #${theme.label} <span class="match-unpair-btn" title="Batalkan pasangan">✕</span></span>
+          <div class="match-item-content">
+            <span>${item.def}</span>
+          </div>
+        `;
+      } else {
+        el.removeAttribute('style');
+        el.innerHTML = `
+          <span class="match-anchor-dot"></span>
+          <div class="match-item-content">
+            <span>${item.def}</span>
+          </div>
+        `;
+      }
+    });
+  }
+
+  setTimeout(drawMatchP8Lines, 20);
+}
+
+function onMatchP8Click(side, id) {
+  if (side === 'left') {
+    if (matchP8State.pairs[id]) {
+      delete matchP8State.pairs[id];
+      matchP8State.selectedLeft = id;
+      playSynthSound('click');
+      renderMatchP8UI();
+      return;
+    }
+    if (matchP8State.selectedLeft === id) {
+      matchP8State.selectedLeft = null;
+      playSynthSound('click');
+      renderMatchP8UI();
+      return;
+    }
+    matchP8State.selectedLeft = id;
+    playSynthSound('click');
+    renderMatchP8UI();
+  } else if (side === 'right') {
+    if (matchP8State.selectedLeft !== null) {
+      const leftId = matchP8State.selectedLeft;
+      const existingLeft = Object.keys(matchP8State.pairs).find(k => matchP8State.pairs[k] === id);
+      if (existingLeft && existingLeft !== leftId) {
+        delete matchP8State.pairs[existingLeft];
+      }
+      matchP8State.pairs[leftId] = id;
+      matchP8State.selectedLeft = null;
+      playSynthSound('packet_arrive');
+      renderMatchP8UI();
+    } else {
+      const pairedLeft = Object.keys(matchP8State.pairs).find(k => matchP8State.pairs[k] === id);
+      if (pairedLeft) {
+        delete matchP8State.pairs[pairedLeft];
+        playSynthSound('click');
+        renderMatchP8UI();
+      }
+    }
+  }
+}
+
+function unpairMatchP8(leftId) {
+  if (matchP8State.pairs[leftId]) {
+    delete matchP8State.pairs[leftId];
+    playSynthSound('click');
+    renderMatchP8UI();
+  }
+}
+
+function resetMatchP8() {
+  matchP8State = { selectedLeft: null, pairs: {} };
+  const scoreBox = document.getElementById('match-p8-score-box');
+  if (scoreBox) scoreBox.style.display = 'none';
+  playSynthSound('click');
+  renderMatchP8UI();
+}
+
+function checkMatchP8() {
+  const pairedCount = Object.keys(matchP8State.pairs).length;
+  if (pairedCount === 0) {
+    alert('Silakan hubungkan minimal satu pasangan terlebih dahulu!');
+    return;
+  }
+
+  let correct = 0;
+  MATCH_P8_DATA.forEach(item => {
+    if (matchP8State.pairs[item.id] === item.id) {
+      correct++;
+    }
+  });
+
+  const score = Math.round((correct / MATCH_P8_DATA.length) * 100);
+  const scoreBox = document.getElementById('match-p8-score-box');
+  const badge = document.getElementById('match-p8-score-badge');
+  const text = document.getElementById('match-p8-score-text');
+
+  if (scoreBox && badge && text) {
+    scoreBox.style.display = 'flex';
+    badge.textContent = `🏆 Skor: ${score}`;
+    text.textContent = `${correct} dari ${MATCH_P8_DATA.length} Pasangan Benar! ${correct === MATCH_P8_DATA.length ? '🎉 Luar Biasa!' : 'Semangat Belajar!'}`;
+  }
+
+  if (score >= 80) {
+    playSynthSound('success');
+    spawnConfetti();
+  } else {
+    playSynthSound('click');
+  }
+}
+
+function drawMatchP8Lines() {
+  const container = document.getElementById('match-container-p8');
+  const svg = document.getElementById('match-svg-layer-p8');
+  if (!container || !svg) return;
+
+  svg.innerHTML = '';
+  const containerRect = container.getBoundingClientRect();
+  if (containerRect.width === 0 || containerRect.height === 0) return;
+
+  const scaleX = (containerRect.width > 0 && container.offsetWidth > 0) ? (containerRect.width / container.offsetWidth) : 1;
+  const scaleY = (containerRect.height > 0 && container.offsetHeight > 0) ? (containerRect.height / container.offsetHeight) : 1;
+
+  Object.entries(matchP8State.pairs).forEach(([leftId, rightId]) => {
+    const leftEl = document.getElementById(`match-p8-left-${leftId}`);
+    const rightEl = document.getElementById(`match-p8-right-${rightId}`);
+    if (!leftEl || !rightEl) return;
+
+    const leftRect = leftEl.getBoundingClientRect();
+    const rightRect = rightEl.getBoundingClientRect();
+
+    const x1 = (leftRect.right - containerRect.left) / scaleX;
+    const y1 = (leftRect.top + leftRect.height / 2 - containerRect.top) / scaleY;
+    const x2 = (rightRect.left - containerRect.left) / scaleX;
+    const y2 = (rightRect.top + rightRect.height / 2 - containerRect.top) / scaleY;
+
+    const theme = MATCH_P8_THEMES[leftId] || MATCH_P8_THEMES['1'];
+    const midX = (x1 + x2) / 2;
+
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', `M ${x1},${y1} C ${midX},${y1} ${midX},${y2} ${x2},${y2}`);
+    path.setAttribute('stroke', theme.border);
+    path.setAttribute('stroke-width', '4');
+    path.setAttribute('stroke-dasharray', '8 4');
+    path.setAttribute('stroke-linecap', 'round');
+    path.setAttribute('fill', 'none');
+    svg.appendChild(path);
+
+    const c1 = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    c1.setAttribute('cx', x1);
+    c1.setAttribute('cy', y1);
+    c1.setAttribute('r', '5');
+    c1.setAttribute('fill', theme.color);
+    svg.appendChild(c1);
+
+    const c2 = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    c2.setAttribute('cx', x2);
+    c2.setAttribute('cy', y2);
+    c2.setAttribute('r', '5');
+    c2.setAttribute('fill', theme.color);
+    svg.appendChild(c2);
+  });
+}
+
+// Aliases for compatibility
+function initDragDrop() { initMatchP8(); }
+function resetDragDrop() { resetMatchP8(); }
+function checkDragDrop() { checkMatchP8(); }
+
+
+// ==================== NETWORK SIMULATION ====================
+
+// ==================== WEB AUDIO SYNTHESIZER (SOUND FX) ====================
+
+let audioCtx = null;
+
+function getAudioContext() {
+  if (!audioCtx) {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (AudioContextClass) {
+      audioCtx = new AudioContextClass();
+    }
+  }
+  if (audioCtx && audioCtx.state === 'suspended') {
+    audioCtx.resume();
+  }
+  return audioCtx;
+}
+
+function playSynthSound(type) {
+  try {
+    const ctx = getAudioContext();
+    if (!ctx) return;
+
+    const now = ctx.currentTime;
+
+    if (type === 'transmit') {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(520, now);
+      osc.frequency.exponentialRampToValueAtTime(1040, now + 0.18);
+      gain.gain.setValueAtTime(0.2, now);
+      gain.gain.linearRampToValueAtTime(0.01, now + 0.2);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now);
+      osc.stop(now + 0.2);
+    } else if (type === 'hop') {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(650, now);
+      gain.gain.setValueAtTime(0.15, now);
+      gain.gain.linearRampToValueAtTime(0.01, now + 0.08);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now);
+      osc.stop(now + 0.08);
+    } else if (type === 'packet_arrive') {
+      const notes = [587.33, 880];
+      notes.forEach((freq, i) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freq, now + (i * 0.06));
+        gain.gain.setValueAtTime(0.2, now + (i * 0.06));
+        gain.gain.linearRampToValueAtTime(0.01, now + (i * 0.06) + 0.15);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(now + (i * 0.06));
+        osc.stop(now + (i * 0.06) + 0.15);
+      });
+    } else if (type === 'error') {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(220, now);
+      osc.frequency.linearRampToValueAtTime(140, now + 0.25);
+      gain.gain.setValueAtTime(0.25, now);
+      gain.gain.linearRampToValueAtTime(0.01, now + 0.3);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now);
+      osc.stop(now + 0.3);
+    } else if (type === 'level_complete') {
+      const chord = [523.25, 659.25, 783.99, 1046.50];
+      chord.forEach((freq, i) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(freq, now + (i * 0.09));
+        gain.gain.setValueAtTime(0.25, now + (i * 0.09));
+        gain.gain.exponentialRampToValueAtTime(0.001, now + (i * 0.09) + 0.4);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(now + (i * 0.09));
+        osc.stop(now + (i * 0.09) + 0.45);
+      });
+    } else if (type === 'victory') {
+      const fanfares = [523.25, 659.25, 783.99, 1046.50, 1318.51];
+      fanfares.forEach((freq, i) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freq, now + (i * 0.12));
+        gain.gain.setValueAtTime(0.3, now + (i * 0.12));
+        gain.gain.exponentialRampToValueAtTime(0.001, now + (i * 0.12) + 0.5);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(now + (i * 0.12));
+        osc.stop(now + (i * 0.12) + 0.55);
+      });
+    }
+  } catch (e) {
+    // Audio optional / graceful fallback
+  }
+}
+
+
+// ==================== SIMULATOR SISTEM KOMPUTER GAME (PAGE 11) ====================
+
+let computerGame = {
+  currentLevel: 1,
+  unlockedLevel: 1,
+  stars: { 1: 0, 2: 0, 3: 0, 4: 0 },
+
+  // Misi 1: Rakit Komputer Spesifikasi & Kompatibilitas
+  m1: {
+    mounted: { cpu: null, ram: null, ssd: null, gpu: null, psu: null },
+    powered: false
+  },
+
+  // Misi 2: Sakelar Biner 8-Bit (Bobot: 128, 64, 32, 16, 8, 4, 2, 1)
+  m2: {
+    bits: [0, 0, 0, 0, 0, 0, 0, 0],
+    challengeIdx: 1,
+    completed: { 1: false, 2: false, 3: false },
+    challenges: [
+      { id: 1, title: "Tantangan 1: Desimal 27", targetDec: 27, hint: "Aktifkan sakelar 16, 8, 2, dan 1 (16 + 8 + 2 + 1 = 27)" },
+      { id: 2, title: "Tantangan 2: Huruf 'K' (Desimal 75)", targetDec: 75, hint: "Aktifkan sakelar 64, 8, 2, dan 1 (64 + 8 + 2 + 1 = 75)" },
+      { id: 3, title: "Tantangan 3: Desimal 200", targetDec: 200, hint: "Aktifkan sakelar 128, 64, dan 8 (128 + 64 + 8 = 200)" }
+    ]
+  },
+
+  // Misi 3: Kasus Teknisi 1 (SOP Hardware: Layar Gelap & Bunyi Beep)
+  m3: {
+    selectedActions: [],
+    isBeeping: false,
+    beepInterval: null
+  },
+
+  // Misi 4: Kasus Teknisi 2 (Paket Optimasi Kinerja: RAM 98% vs Storage)
+  m4: {
+    selectedActions: []
+  }
+};
+
+function initComputerGame() {
+  updateGameHUD();
+  renderCurrentStageUI();
+}
+
+function initPacketCommanderGame() {
+  initComputerGame();
+}
+
+function updateGameHUD() {
+  const totalStars = (computerGame.stars[1] ? 1 : 0) + (computerGame.stars[2] ? 1 : 0) + (computerGame.stars[3] ? 1 : 0) + (computerGame.stars[4] ? 1 : 0);
+  const starsEl = document.getElementById('game-total-stars');
+  if (starsEl) starsEl.textContent = `⭐ ${totalStars}/4`;
+
+  for (let lvl = 1; lvl <= 4; lvl++) {
+    const tab = document.getElementById(`game-tab-${lvl}`);
+    const tabStars = document.getElementById(`stars-lvl-${lvl}`);
+    if (!tab) continue;
+
+    tab.classList.remove('active', 'locked');
+    if (lvl === computerGame.currentLevel) tab.classList.add('active');
+
+    if (lvl > computerGame.unlockedLevel) {
+      tab.classList.add('locked');
+      if (tabStars) tabStars.textContent = '🔒';
+    } else {
+      if (tabStars) tabStars.textContent = computerGame.stars[lvl] ? '⭐ 1/1' : '⭐ 0/1';
+    }
+  }
+
+  // Update Status & Diagnostik Badge
+  const statusEl = document.getElementById('game-net-status');
+  const latencyEl = document.getElementById('game-latency');
+  if (statusEl && latencyEl) {
+    if (computerGame.currentLevel === 1) {
+      statusEl.textContent = computerGame.m1.powered ? '🟢 Sistem Aktif' : '🟡 Menunggu Rakit';
+      latencyEl.textContent = computerGame.m1.powered ? '⚡ POST OK' : '⚡ Standby';
+    } else if (computerGame.currentLevel === 2) {
+      statusEl.textContent = computerGame.stars[2] ? '🟢 Biner Valid' : '🔵 Mode Input';
+      latencyEl.textContent = '⏱️ Real-time';
+    } else if (computerGame.currentLevel === 3) {
+      statusEl.textContent = computerGame.stars[3] ? '🟢 RAM Normal' : '🔴 Layar Blank';
+      latencyEl.textContent = computerGame.stars[3] ? '⚡ Signal OK' : '🔊 Beep Code';
+    } else if (computerGame.currentLevel === 4) {
+      statusEl.textContent = computerGame.stars[4] ? '🟢 Kinerja Pulih' : '⚠️ RAM 98% (Lag)';
+      latencyEl.textContent = computerGame.stars[4] ? '⚡ Optimal' : '⚠️ Bottleneck';
+    }
+  }
+}
+
+function switchGameLevel(lvl) {
+  if (lvl > computerGame.unlockedLevel) {
+    showGameModal({
+      icon: '🔒',
+      title: 'Misi Masih Terkunci',
+      text: `Selesaikan Misi ${lvl - 1} terlebih dahulu untuk membuka tantangan berikutnya!`,
+      actions: [{ text: 'Mengerti', primary: true, onClick: closeGameModal }]
+    });
+    playSynthSound('error');
+    return;
+  }
+
+  // Hentikan beep jika keluar dari level 3
+  if (computerGame.currentLevel === 3 && lvl !== 3) {
+    stopBeepSound();
+  }
+
+  computerGame.currentLevel = lvl;
+  playSynthSound('click');
+  updateGameHUD();
+  renderCurrentStageUI();
+}
+
+function resetCurrentGameLevel() {
+  playSynthSound('click');
+  if (computerGame.currentLevel === 1) {
+    computerGame.m1.mounted = { cpu: null, ram: null, ssd: null, gpu: null, psu: null };
+    computerGame.m1.powered = false;
+    updateM1UI();
+    showM1Notice('Seluruh komponen motherboard telah dikembalikan ke rak komponen.', 'info');
+  } else if (computerGame.currentLevel === 2) {
+    computerGame.m2.bits = [0, 0, 0, 0, 0, 0, 0, 0];
+    renderBinarySwitches();
+    updateBinaryDisplay();
+  } else if (computerGame.currentLevel === 3) {
+    computerGame.m3.selectedActions = [];
+    renderTroubleCase1UI();
+  } else if (computerGame.currentLevel === 4) {
+    computerGame.m4.selectedActions = [];
+    renderTroubleCase2UI();
+  }
+}
+
+function showGameHint() {
+  playSynthSound('click');
+  const lvl = computerGame.currentLevel;
+  if (lvl === 1) {
+    showGameModal({
+      icon: '💡',
+      title: 'Bantuan Misi 1: Kompatibilitas Perangkat',
+      text: 'Pasangkan kelima komponen modern yang sesuai dengan spesifikasi Motherboard ATX Gaming Series:<br><br>1. <strong>CPU:</strong> Prosesor Multi-Core LGA 1700 (bukan cooler jadul)<br>2. <strong>RAM:</strong> Modul 16GB DDR4 (posisi notch presisi)<br>3. <strong>Penyimpanan:</strong> SSD NVMe M.2 512GB (bukan kabel pita IDE)<br>4. <strong>Kartu Grafis:</strong> GPU Dual-Fan PCIe x16<br>5. <strong>Catu Daya:</strong> PSU 550W 80+ ATX 24-Pin (bukan adaptor charger 10W)',
+      actions: [{ text: 'Siap Merakit', primary: true, onClick: closeGameModal }]
+    });
+  } else if (lvl === 2) {
+    const ch = computerGame.m2.challenges.find(c => c.id === computerGame.m2.challengeIdx);
+    showGameModal({
+      icon: '💡',
+      title: 'Bantuan Misi 2: Sakelar Biner',
+      text: ch ? ch.hint : 'Setiap sakelar bernilai bobot perpangkatan dua (128, 64, 32, 16, 8, 4, 2, 1). Jumlahkan angka aktif (1) hingga menghasilkan target desimal yang diminta.',
+      actions: [{ text: 'Paham', primary: true, onClick: closeGameModal }]
+    });
+  } else if (lvl === 3) {
+    showGameModal({
+      icon: '💡',
+      title: 'Bantuan Misi 3: Kode Beep Berulang',
+      text: 'Bunyi beep panjang berulang dan layar hitam no-signal umumnya menandakan memori RAM kotor atau longgar. Ikuti urutan SOP: Cabut listrik &rarr; Buka pengait &rarr; Lepas RAM &rarr; Bersihkan pin emas &rarr; Pasang kembali sampai berbunyi klik &rarr; Nyalakan komputer.',
+      actions: [{ text: 'Paham', primary: true, onClick: closeGameModal }]
+    });
+  } else if (lvl === 4) {
+    showGameModal({
+      icon: '💡',
+      title: 'Bantuan Misi 4: Bottleneck RAM',
+      text: 'Pada grafik Task Manager terlihat penggunaan RAM mencapai 98% (Bottleneck memori). Hentikan proses/tab yang berlebihan, nonaktifkan startup apps yang tidak perlu, dan tingkatkan kapasitas RAM fisik menjadi 32GB.',
+      actions: [{ text: 'Paham', primary: true, onClick: closeGameModal }]
+    });
+  }
+}
+
+function renderCurrentStageUI() {
+  const p1 = document.getElementById('game-stage-panel-1');
+  const p2 = document.getElementById('game-stage-panel-2');
+  const p3 = document.getElementById('game-stage-panel-3');
+  const p4 = document.getElementById('game-stage-panel-4');
+  const descEl = document.getElementById('game-mission-desc');
+  const iconEl = document.getElementById('game-mission-icon');
+
+  if (p1) p1.style.display = computerGame.currentLevel === 1 ? 'block' : 'none';
+  if (p2) p2.style.display = computerGame.currentLevel === 2 ? 'block' : 'none';
+  if (p3) p3.style.display = computerGame.currentLevel === 3 ? 'block' : 'none';
+  if (p4) p4.style.display = computerGame.currentLevel === 4 ? 'block' : 'none';
+
+  if (computerGame.currentLevel === 1) {
+    if (iconEl) iconEl.textContent = '🔧';
+    if (descEl) descEl.textContent = 'Misi 1: Seret & Lepas (Drag & Drop) 5 komponen yang kompatibel (CPU, RAM, SSD, GPU, PSU) ke Motherboard. Begitu semua slot terisi, sistem akan otomatis memeriksa apakah komputer berhasil menyala!';
+    updateM1UI();
+    setupM1DragDrop();
+  } else if (computerGame.currentLevel === 2) {
+    if (iconEl) iconEl.textContent = '💡';
+    if (descEl) descEl.textContent = 'Misi 2: Atur sakelar 8-bit (1/0) agar kalkulasi menghasilkan nilai desimal / karakter yang diminta! (Dikerjakan 1 tantangan sudah dianggap selesai)';
+    renderBinarySwitches();
+    updateBinaryDisplay();
+    updateBinaryChallengeButtonsUI();
+  } else if (computerGame.currentLevel === 3) {
+    if (iconEl) iconEl.textContent = '🛠️';
+    if (descEl) descEl.textContent = 'Misi 3: Kasus Teknisi 1 — Analisis komputer blank dengan kode beep panjang berulang dan tentukan perbaikannya!';
+    renderTroubleCase1UI();
+  } else if (computerGame.currentLevel === 4) {
+    if (iconEl) iconEl.textContent = '⚡';
+    if (descEl) descEl.textContent = 'Misi 4: Kasus Teknisi 2 — Analisis grafik Task Manager saat sistem freeze, temukan bottleneck dan solusi multitasking!';
+    renderTroubleCase2UI();
+  }
+}
+
+// ==================== MISI 1: RAKIT MOTHERBOARD ENHANCED ====================
+
+const M1_CATALOG = {
+  cpu_good: {
+    slot: 'cpu',
+    name: 'CPU Multi-Core LGA 1700',
+    tag: 'Socket LGA 1700',
+    isGood: true,
+    img: 'assets/component-cpu.svg',
+    installedImg: 'assets/component-cpu.svg'
+  },
+  cpu_bad: {
+    slot: 'cpu',
+    name: 'Cooler Heatsink AM3',
+    tag: 'Socket AM3 / FM2',
+    isGood: false,
+    img: 'assets/component-cooler.svg',
+    installedImg: 'assets/component-cooler.svg',
+    error: 'Yang kamu pasang adalah Heatsink Cooler soket AMD, bukan prosesor CPU! Soket LGA 1700 masih kosong tanpa chip, sehingga komputer tidak memiliki otak pemroses instruksi.'
+  },
+  ram_good: {
+    slot: 'ram',
+    name: 'RAM 16GB DDR4',
+    tag: 'DDR4 3200MHz',
+    isGood: true,
+    img: 'assets/component-ram.svg',
+    installedImg: 'assets/component-ram-installed.svg'
+  },
+  ram_bad: {
+    slot: 'ram',
+    name: 'RAM 2GB DDR2',
+    tag: 'DDR2 800MHz',
+    isGood: false,
+    img: 'assets/component-ram-ddr2.svg',
+    installedImg: 'assets/component-ram-ddr2-installed.svg',
+    error: 'RAM DDR2 memiliki posisi lekukan (notch) dan voltase berbeda dengan slot DDR4 modern. Komputer gagal menyala karena tidak ada memori kerja (RAM) yang kompatibel.'
+  },
+  ssd_good: {
+    slot: 'ssd',
+    name: 'SSD NVMe M.2 512GB',
+    tag: 'Slot M.2 PCIe',
+    isGood: true,
+    img: 'assets/component-ssd.svg',
+    installedImg: 'assets/component-ssd.svg'
+  },
+  hdd_bad: {
+    slot: 'ssd',
+    name: 'Harddisk 80GB IDE',
+    tag: 'Kabel Pita IDE',
+    isGood: false,
+    img: 'assets/component-hdd-ide.svg',
+    installedImg: 'assets/component-hdd-ide.svg',
+    error: 'Harddisk IDE menggunakan kabel pita kuno yang tidak bisa terhubung ke slot M.2 NVMe PCIe modern. Komputer tidak dapat booting karena tidak ada media penyimpanan sistem operasi.'
+  },
+  gpu_good: {
+    slot: 'gpu',
+    name: 'GPU Dual-Fan PCIe x16',
+    tag: 'Slot PCIe x16',
+    isGood: true,
+    img: 'assets/component-gpu.svg',
+    installedImg: 'assets/component-gpu-installed.svg'
+  },
+  psu_good: {
+    slot: 'psu',
+    name: 'PSU 550W 80+ ATX',
+    tag: 'Konektor 24P ATX',
+    isGood: true,
+    img: 'assets/component-psu.svg',
+    installedImg: 'assets/component-psu-installed.svg'
+  },
+  charger_bad: {
+    slot: 'psu',
+    name: 'Adaptor Daya 10W DC',
+    tag: 'Output DC 5V 2A',
+    isGood: false,
+    img: 'assets/comp_charger_bad.jpg',
+    installedImg: 'assets/comp_charger_bad.jpg',
+    error: 'Adaptor 10W DC hanya untuk charger ponsel dan tidak memiliki konektor 24-Pin ATX. Komputer kekurangan daya total sehingga mati (tidak ada daya listrik sama sekali).'
+  }
+};
+
+function playBiosBeep(isSuccess) {
+  try {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+
+    if (isSuccess) {
+      // 1 Beep Pendek Crisp khas BIOS POST Lolos (950 Hz, 0.14 detik)
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(950, ctx.currentTime);
+      gain.gain.setValueAtTime(0.2, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.14);
+      osc.start(ctx.currentTime);
+      osc.stop(ctx.currentTime + 0.15);
+    } else {
+      // Beep Peringatan Error Rendah (350 Hz, 0.35 detik)
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(350, ctx.currentTime);
+      gain.gain.setValueAtTime(0.25, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);
+      osc.start(ctx.currentTime);
+      osc.stop(ctx.currentTime + 0.36);
+    }
+  } catch (e) {
+    // Fallback gracefully
+  }
+}
+
+function setPostLed(id, color) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.style.color = color;
+  if (color === '#22c55e') {
+    el.style.textShadow = '0 0 8px rgba(34, 197, 94, 0.9)';
+  } else if (color === '#ef4444') {
+    el.style.textShadow = '0 0 8px rgba(239, 68, 68, 0.9)';
+  } else if (color === '#f59e0b') {
+    el.style.textShadow = '0 0 8px rgba(245, 158, 11, 0.9)';
+  } else {
+    el.style.textShadow = 'none';
+  }
+}
+
+// State variables for M1 Drag and Drop
+let currentDraggedM1Key = null;
+let currentDraggedM1FromSlot = null;
+let m1NoticeTimeout = null;
+
+function showM1Notice(msg, type = 'info') {
+  const descEl = document.getElementById('game-mission-desc');
+  const iconEl = document.getElementById('game-mission-icon');
+  if (!descEl || !iconEl) return;
+
+  if (m1NoticeTimeout) clearTimeout(m1NoticeTimeout);
+
+  iconEl.textContent = type === 'warn' ? '⚠️' : (type === 'success' ? '✅' : '💡');
+  descEl.innerHTML = `<span style="color:${type === 'warn' ? '#ef4444' : (type === 'success' ? '#10b981' : '#0288d1')};font-weight:700;">${msg}</span>`;
+
+  m1NoticeTimeout = setTimeout(() => {
+    if (computerGame.currentLevel === 1) {
+      iconEl.textContent = '🔧';
+      descEl.textContent = 'Misi 1: Seret & Lepas (Drag & Drop) 5 komponen yang kompatibel (CPU, RAM, SSD, GPU, PSU) ke Motherboard. Begitu semua slot terisi, sistem akan otomatis memeriksa apakah komputer berhasil menyala!';
+    }
+  }, 3500);
+}
+
+// User klik kartu: klik untuk memasang langsung ke soket (atau mencopot bila sudah terpasang)
+function toggleMountComponentFromCard(itemKey) {
+  const item = M1_CATALOG[itemKey];
+  if (!item) return;
+
+  if (computerGame.m1.mounted[item.slot] === itemKey) {
+    unmountComponentFromSlot(item.slot);
+    return;
+  }
+
+  mountComponentToSlot(itemKey, item.slot);
+  const targetSocket = document.getElementById(`socket-${item.slot}`);
+  if (targetSocket) {
+    targetSocket.classList.add('snap-bounce');
+    setTimeout(() => targetSocket?.classList.remove('snap-bounce'), 450);
+  }
+}
+
+function warnDragOnlyComponent(itemKey) {
+  toggleMountComponentFromCard(itemKey);
+}
+
+// Kompatibilitas mundur jika fungsi selectOrMountComponent masih dipanggil di tempat lain
+function selectOrMountComponent(itemKey) {
+  toggleMountComponentFromCard(itemKey);
+}
+
+function highlightM1TargetSlot(slotType) {
+  const targetSlot = document.getElementById(`socket-${slotType}`);
+  if (targetSlot) {
+    targetSlot.classList.add('slot-highlight-target');
+  }
+  const slots = ['cpu', 'ram', 'gpu', 'ssd', 'psu'];
+  slots.forEach(s => {
+    if (s !== slotType) {
+      const el = document.getElementById(`socket-${s}`);
+      if (el && !el.classList.contains('filled')) {
+        el.classList.add('slot-dimmed');
+      }
+    }
+  });
+}
+
+function clearM1SlotHighlights() {
+  const slots = ['cpu', 'ram', 'gpu', 'ssd', 'psu'];
+  slots.forEach(s => {
+    const el = document.getElementById(`socket-${s}`);
+    if (el) {
+      el.classList.remove('slot-highlight-target', 'slot-dimmed', 'drag-over', 'drag-forbidden');
+    }
+  });
+  const shelf = document.getElementById('pc-inventory-list');
+  if (shelf) shelf.classList.remove('shelf-drop-active');
+}
+
+function mountComponentToSlot(itemKey, slotType) {
+  const item = M1_CATALOG[itemKey];
+  if (!item) return;
+
+  computerGame.m1.mounted[slotType] = itemKey;
+  computerGame.m1.powered = false;
+  playSynthSound('packet_arrive');
+  updateM1UI();
+
+  if (item.isGood) {
+    showM1Notice(`Mantap! ${item.name} berhasil terpasang di soket ${slotType.toUpperCase()}!`, 'success');
+  } else {
+    showM1Notice(`Perhatian: ${item.name} dipasang di soket ${slotType.toUpperCase()} (waspadai kompatibilitas spesifikasi!)`, 'warn');
+  }
+
+  // Auto completion check tanpa POST BIOS
+  checkM1AutoCompletion();
+}
+
+function unmountComponentFromSlot(slotType) {
+  if (computerGame.m1.mounted[slotType]) {
+    const itemKey = computerGame.m1.mounted[slotType];
+    const item = M1_CATALOG[itemKey];
+    computerGame.m1.mounted[slotType] = null;
+    computerGame.m1.powered = false;
+    playSynthSound('click');
+    updateM1UI();
+    if (item) {
+      showM1Notice(`${item.name} dilepas dari soket dan dikembalikan ke rak.`, 'info');
+    }
+  }
+}
+
+function clickMotherboardSocket(slotType) {
+  if (computerGame.m1.mounted[slotType]) {
+    unmountComponentFromSlot(slotType);
+  }
+}
+
+// Inisialisasi Drag and Drop untuk Misi 1 (Desktop HTML5 & Mobile Touch)
+function setupM1DragDrop() {
+  // 1. Setup Kartu Komponen di Rak (Drag source ke motherboard & Click-to-Mount)
+  document.querySelectorAll('.inv-comp-card').forEach(card => {
+    const key = card.getAttribute('data-comp-key');
+    const item = M1_CATALOG[key];
+    if (!item) return;
+
+    // Klik kartu inventaris: klik untuk pasang / copot langsung (Click-to-Mount)
+    card.onclick = () => toggleMountComponentFromCard(key);
+
+    // Desktop Drag Start
+    card.ondragstart = (e) => {
+      if (computerGame.m1.mounted[item.slot] === key) {
+        e.preventDefault();
+        return;
+      }
+      currentDraggedM1Key = key;
+      currentDraggedM1FromSlot = null;
+      card.classList.add('dragging');
+      if (e.dataTransfer) {
+        e.dataTransfer.setData('text/plain', key);
+        e.dataTransfer.effectAllowed = 'copyMove';
+      }
+      highlightM1TargetSlot(item.slot);
+      playSynthSound('click');
+    };
+
+    // Desktop Drag End
+    card.ondragend = () => {
+      card.classList.remove('dragging');
+      clearM1SlotHighlights();
+      setTimeout(() => {
+        currentDraggedM1Key = null;
+      }, 80);
+    };
+
+    // Mobile / Tablet Touch Drag Handler
+    setupM1TouchDrag(card, key, item);
+  });
+
+  // 2. Setup Seluruh Area Motherboard (Drop target fleksibel: melepaskan komponen di mana saja di area motherboard otomatis terpasang ke soketnya)
+  const mbDropTargets = [
+    document.querySelector('.motherboard-workspace-card'),
+    document.getElementById('mb-board-wrapper'),
+    document.getElementById('mb-board-inner')
+  ];
+  mbDropTargets.forEach(targetEl => {
+    if (!targetEl) return;
+    targetEl.ondragover = (e) => {
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+    };
+    targetEl.ondrop = (e) => {
+      e.preventDefault();
+      const droppedKey = (e.dataTransfer && e.dataTransfer.getData('text/plain')) || currentDraggedM1Key;
+      clearM1SlotHighlights();
+
+      if (!droppedKey || !M1_CATALOG[droppedKey]) return;
+      const droppedItem = M1_CATALOG[droppedKey];
+
+      mountComponentToSlot(droppedKey, droppedItem.slot);
+      const targetSocket = document.getElementById(`socket-${droppedItem.slot}`);
+      if (targetSocket) {
+        targetSocket.classList.add('snap-bounce');
+        setTimeout(() => targetSocket?.classList.remove('snap-bounce'), 450);
+      }
+      currentDraggedM1Key = null;
+    };
+  });
+
+  // 3. Setup Soket Spesifik Motherboard (Drop target presisi & feedback edukatif)
+  const slots = ['cpu', 'ram', 'gpu', 'ssd', 'psu'];
+  slots.forEach(slotType => {
+    const socketEl = document.getElementById(`socket-${slotType}`);
+    if (!socketEl) return;
+
+    socketEl.ondragover = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+      if (!currentDraggedM1Key) return;
+      const draggedItem = M1_CATALOG[currentDraggedM1Key];
+      if (draggedItem && draggedItem.slot === slotType) {
+        socketEl.classList.remove('drag-forbidden');
+        socketEl.classList.add('drag-over');
+      } else {
+        socketEl.classList.remove('drag-over');
+        socketEl.classList.add('drag-forbidden');
+      }
+    };
+
+    socketEl.ondragleave = () => {
+      socketEl.classList.remove('drag-over', 'drag-forbidden');
+    };
+
+    socketEl.ondrop = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      socketEl.classList.remove('drag-over', 'drag-forbidden');
+      const droppedKey = (e.dataTransfer && e.dataTransfer.getData('text/plain')) || currentDraggedM1Key;
+      clearM1SlotHighlights();
+
+      if (!droppedKey || !M1_CATALOG[droppedKey]) return;
+      const droppedItem = M1_CATALOG[droppedKey];
+
+      if (droppedItem.slot === slotType) {
+        mountComponentToSlot(droppedKey, slotType);
+        socketEl.classList.add('snap-bounce');
+        setTimeout(() => socketEl?.classList.remove('snap-bounce'), 450);
+      } else {
+        playSynthSound('error');
+        showM1Notice(`Komponen "${droppedItem.name}" tidak dapat dipasang di soket ${slotType.toUpperCase()}! Pasang di soket ${droppedItem.slot.toUpperCase()}.`, 'warn');
+      }
+      currentDraggedM1Key = null;
+    };
+  });
+
+  // 4. Setup Rak Komponen sebagai Drop Target saat Melepas Komponen (Dismantle)
+  const shelfTargets = [
+    document.getElementById('pc-inventory-list'),
+    document.querySelector('.game-side-panel.sender-panel')
+  ];
+  shelfTargets.forEach(shelfEl => {
+    if (!shelfEl) return;
+    shelfEl.ondragover = (e) => {
+      if (currentDraggedM1FromSlot) {
+        e.preventDefault();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+        const listEl = document.getElementById('pc-inventory-list');
+        if (listEl) listEl.classList.add('shelf-drop-active');
+      }
+    };
+    shelfEl.ondragleave = () => {
+      const listEl = document.getElementById('pc-inventory-list');
+      if (listEl) listEl.classList.remove('shelf-drop-active');
+    };
+    shelfEl.ondrop = (e) => {
+      e.preventDefault();
+      const listEl = document.getElementById('pc-inventory-list');
+      if (listEl) listEl.classList.remove('shelf-drop-active');
+      const slotToRemove = currentDraggedM1FromSlot || ((e.dataTransfer && e.dataTransfer.getData('text/plain')) || '').replace('remove:', '');
+      if (slotToRemove && computerGame.m1.mounted[slotToRemove]) {
+        unmountComponentFromSlot(slotToRemove);
+      }
+      currentDraggedM1FromSlot = null;
+      currentDraggedM1Key = null;
+    };
+  });
+}
+
+// Mobile / Tablet Touch Drag Handler
+function setupM1TouchDrag(card, itemKey, item) {
+  let touchGhost = null;
+  let activeTouchSlot = null;
+
+  card.ontouchstart = (e) => {
+    if (computerGame.m1.mounted[item.slot] === itemKey) return;
+    const touch = e.touches[0];
+    currentDraggedM1Key = itemKey;
+    highlightM1TargetSlot(item.slot);
+
+    touchGhost = document.createElement('div');
+    touchGhost.className = 'touch-drag-ghost';
+    touchGhost.innerHTML = `<img src="${item.img}" alt="${item.name}">`;
+    touchGhost.style.left = touch.clientX + 'px';
+    touchGhost.style.top = touch.clientY + 'px';
+    document.body.appendChild(touchGhost);
+    playSynthSound('click');
+  };
+
+  card.ontouchmove = (e) => {
+    if (!touchGhost) return;
+    e.preventDefault();
+    const touch = e.touches[0];
+    touchGhost.style.left = touch.clientX + 'px';
+    touchGhost.style.top = touch.clientY + 'px';
+
+    touchGhost.style.display = 'none';
+    const elemUnder = document.elementFromPoint(touch.clientX, touch.clientY);
+    touchGhost.style.display = 'flex';
+
+    const slotUnder = elemUnder ? elemUnder.closest('.mb-physical-slot') : null;
+    if (slotUnder) {
+      if (activeTouchSlot !== slotUnder) {
+        if (activeTouchSlot) activeTouchSlot.classList.remove('drag-over', 'drag-forbidden');
+        activeTouchSlot = slotUnder;
+        const targetSlotType = activeTouchSlot.getAttribute('data-slot');
+        if (item.slot === targetSlotType) {
+          activeTouchSlot.classList.add('drag-over');
+        } else {
+          activeTouchSlot.classList.add('drag-forbidden');
+        }
+      }
+    } else {
+      if (activeTouchSlot) {
+        activeTouchSlot.classList.remove('drag-over', 'drag-forbidden');
+        activeTouchSlot = null;
+      }
+    }
+  };
+
+  card.ontouchend = (e) => {
+    if (touchGhost) {
+      touchGhost.remove();
+      touchGhost = null;
+    }
+    if (activeTouchSlot) {
+      const targetSlotType = activeTouchSlot.getAttribute('data-slot');
+      activeTouchSlot.classList.remove('drag-over', 'drag-forbidden');
+      if (item.slot === targetSlotType) {
+        mountComponentToSlot(itemKey, targetSlotType);
+        activeTouchSlot.classList.add('snap-bounce');
+        setTimeout(() => activeTouchSlot?.classList.remove('snap-bounce'), 450);
+      } else {
+        playSynthSound('error');
+        showM1Notice(`Komponen "${item.name}" tidak sesuai dengan soket tersebut!`, 'warn');
+      }
+    } else {
+      const touch = e.changedTouches ? e.changedTouches[0] : null;
+      if (touch) {
+        const elemUnder = document.elementFromPoint(touch.clientX, touch.clientY);
+        if (elemUnder && elemUnder.closest('#mb-board-wrapper')) {
+          mountComponentToSlot(itemKey, item.slot);
+          const targetSocket = document.getElementById(`socket-${item.slot}`);
+          if (targetSocket) {
+            targetSocket.classList.add('snap-bounce');
+            setTimeout(() => targetSocket?.classList.remove('snap-bounce'), 450);
+          }
+        }
+      }
+    }
+    clearM1SlotHighlights();
+    currentDraggedM1Key = null;
+    activeTouchSlot = null;
+  };
+}
+
+// Drag terbalik dari soket terpasang kembali ke rak komponen
+function setupSlotInstalledDragM1(socketEl, slotType) {
+  socketEl.setAttribute('draggable', 'true');
+  socketEl.ondragstart = (e) => {
+    if (!computerGame.m1.mounted[slotType]) {
+      e.preventDefault();
+      return;
+    }
+    currentDraggedM1FromSlot = slotType;
+    currentDraggedM1Key = null;
+    e.dataTransfer.setData('text/plain', 'remove:' + slotType);
+    e.dataTransfer.effectAllowed = 'move';
+
+    const shelfEl = document.getElementById('pc-inventory-list');
+    if (shelfEl) shelfEl.classList.add('shelf-drop-active');
+    playSynthSound('click');
+  };
+
+  socketEl.ondragend = () => {
+    const shelfEl = document.getElementById('pc-inventory-list');
+    if (shelfEl) shelfEl.classList.remove('shelf-drop-active');
+    currentDraggedM1FromSlot = null;
+  };
+}
+
+function updateM1UI() {
+  let countMounted = 0;
+
+  // 1. Update Kartu Inventaris Komponen di Rak
+  Object.keys(M1_CATALOG).forEach(key => {
+    const item = M1_CATALOG[key];
+    const isMounted = computerGame.m1.mounted[item.slot] === key;
+    const cardEl = document.getElementById(`inv-${key}`);
+    const statusEl = document.getElementById(`inv-${key}-status`);
+    if (cardEl && statusEl) {
+      if (isMounted) {
+        cardEl.classList.add('mounted');
+        cardEl.setAttribute('draggable', 'false');
+        statusEl.textContent = '✅ Terpasang di Soket';
+        statusEl.style.color = '#0288d1';
+        statusEl.style.fontWeight = '700';
+      } else {
+        cardEl.classList.remove('mounted');
+        cardEl.setAttribute('draggable', 'true');
+        statusEl.textContent = 'Tarik ke Soket';
+        statusEl.style.color = '#64748b';
+        statusEl.style.fontWeight = 'normal';
+      }
+    }
+  });
+
+  // 2. Update Visual 5 Soket Motherboard
+  const slots = ['cpu', 'ram', 'gpu', 'ssd', 'psu'];
+  slots.forEach(slot => {
+    const mountedKey = computerGame.m1.mounted[slot];
+    const socketEl = document.getElementById(`socket-${slot}`);
+    const installedContainer = document.getElementById(`installed-${slot}`);
+    if (!socketEl) return;
+
+    const slotClass = slot === 'ssd' ? 'storage' : slot;
+
+    if (mountedKey) {
+      countMounted++;
+      const item = M1_CATALOG[mountedKey];
+      socketEl.className = `mb-physical-slot slot-${slotClass} filled ${item.isGood ? '' : 'bad-comp'}`;
+      socketEl.setAttribute('title', `${item.name} — Tarik kembali ke rak atau klik untuk melepas`);
+
+      const displayImg = item.installedImg || item.img;
+      if (installedContainer) {
+        installedContainer.innerHTML = `
+          <img src="${displayImg}" alt="${item.name}" draggable="true" title="${item.name} — Tarik ke rak atau klik untuk melepas">
+        `;
+      }
+      setupSlotInstalledDragM1(socketEl, slot);
+    } else {
+      socketEl.className = `mb-physical-slot slot-${slotClass}`;
+      socketEl.removeAttribute('title');
+      socketEl.removeAttribute('draggable');
+      socketEl.ondragstart = null;
+      socketEl.ondragend = null;
+      if (installedContainer) {
+        installedContainer.innerHTML = '';
+      }
+    }
+  });
+
+  // 3. Update Bar Telemetri Atas Motherboard
+  const countEl = document.getElementById('installed-count');
+  if (countEl) countEl.textContent = countMounted;
+
+  const stepEl = document.getElementById('mb-step-indicator');
+  if (stepEl) {
+    stepEl.textContent = countMounted === 5 ? 'Perakitan Lengkap' : `Langkah ${countMounted + 1} dari 5`;
+  }
+
+  const statusPill = document.getElementById('mb-status-pill');
+  if (statusPill) {
+    if (computerGame.m1.powered) {
+      statusPill.textContent = 'STATUS: SIAP DIGUNAKAN 🟢';
+      statusPill.style.background = 'rgba(16,185,129,0.18)';
+      statusPill.style.color = '#10b981';
+      statusPill.style.borderColor = 'rgba(16,185,129,0.35)';
+    } else if (countMounted === 0) {
+      statusPill.textContent = 'STATUS: BELUM DIRAKIT';
+      statusPill.style.background = 'rgba(239,68,68,0.18)';
+      statusPill.style.color = '#ef4444';
+      statusPill.style.borderColor = 'rgba(239,68,68,0.35)';
+    } else {
+      statusPill.textContent = `STATUS: MERAKIT (${countMounted}/5)`;
+      statusPill.style.background = 'rgba(245,158,11,0.18)';
+      statusPill.style.color = '#f59e0b';
+      statusPill.style.borderColor = 'rgba(245,158,11,0.35)';
+    }
+  }
+
+  // 4. Update LED Diagnostik Realtime di Sudut Kanan Atas Motherboard
+  const ledCpu = document.getElementById('live-led-cpu');
+  const ledRam = document.getElementById('live-led-dram');
+  const ledGpu = document.getElementById('live-led-vga');
+  const ledBoot = document.getElementById('live-led-boot');
+
+  if (ledCpu) ledCpu.classList.toggle('active', !!computerGame.m1.mounted.cpu);
+  if (ledRam) ledRam.classList.toggle('active', !!computerGame.m1.mounted.ram);
+  if (ledGpu) ledGpu.classList.toggle('active', !!computerGame.m1.mounted.gpu);
+  if (ledBoot) ledBoot.classList.toggle('active', !!computerGame.m1.mounted.ssd);
+}
+
+// Pemeriksaan Otomatis Begitu 5 Komponen Terpasang (Langsung Popup Modal, Tanpa Tombol POST BIOS)
+function checkM1AutoCompletion() {
+  const m = computerGame.m1.mounted;
+  const count = (m.cpu ? 1 : 0) + (m.ram ? 1 : 0) + (m.ssd ? 1 : 0) + (m.gpu ? 1 : 0) + (m.psu ? 1 : 0);
+
+  // Hanya periksa ketika 5 slot telah terpasang semua
+  if (count < 5) return;
+
+  const isCpuOk = m.cpu === 'cpu_good';
+  const isRamOk = m.ram === 'ram_good';
+  const isSsdOk = m.ssd === 'ssd_good';
+  const isGpuOk = m.gpu === 'gpu_good';
+  const isPsuOk = m.psu === 'psu_good';
+  const isAllGood = isCpuOk && isRamOk && isSsdOk && isGpuOk && isPsuOk;
+
+  if (isAllGood) {
+    // SEMUA KOMPONEN TEPAT & 100% KOMPATIBEL
+    computerGame.m1.powered = true;
+    updateM1UI();
+    playBiosBeep(true);
+    playSynthSound('success');
+    spawnConfetti();
+
+    computerGame.stars[1] = 1;
+    if (computerGame.unlockedLevel < 2) computerGame.unlockedLevel = 2;
+    updateGameHUD();
+
+    setTimeout(() => {
+      showGameModal({
+        icon: '💻',
+        title: 'Komputer Berhasil Menyala! 🎉',
+        text: '<strong>STATUS: BENAR (100% Kompatibel)</strong><br><br>Luar biasa! Seluruh 5 komponen (CPU LGA 1700, RAM DDR4, SSD M.2 NVMe, GPU PCIe x16, dan PSU ATX 550W) sangat cocok dengan spesifikasi Motherboard. Arus listrik mengalir sempurna dan komputer berhasil booting normal!',
+        stars: '⭐ Misi 1 Selesai!',
+        actions: [
+          { text: 'Lanjut ke Misi 2 (Sakelar Biner) ▶', primary: true, onClick: () => { closeGameModal(); switchGameLevel(2); } }
+        ]
+      });
+    }, 300);
+  } else {
+    // ADA KOMPONEN TIDAK KOMPATIBEL -> KOMPUTER TIDAK MENYALA
+    const errors = [];
+    if (!isPsuOk) errors.push(`⚡ <strong>Catu Daya (PSU):</strong> ${M1_CATALOG[m.psu]?.error || 'Catu daya tidak kompatibel!'}`);
+    if (!isCpuOk) errors.push(`🧠 <strong>Prosesor (CPU):</strong> ${M1_CATALOG[m.cpu]?.error || 'Soket CPU salah!'}`);
+    if (!isRamOk) errors.push(`💾 <strong>Memori (RAM):</strong> ${M1_CATALOG[m.ram]?.error || 'Slot RAM tidak cocok!'}`);
+    if (!isGpuOk) errors.push(`🖥️ <strong>Kartu Grafis (GPU):</strong> Kartu grafis belum terpasang dengan benar pada slot PCIe x16, sehingga tidak ada sinyal keluaran ke monitor!`);
+    if (!isSsdOk) errors.push(`📁 <strong>Penyimpanan (SSD):</strong> ${M1_CATALOG[m.ssd]?.error || 'Media penyimpanan tidak cocok!'}`);
+
+    playBiosBeep(false);
+    playSynthSound('error');
+
+    setTimeout(() => {
+      showGameModal({
+        icon: '⚠️',
+        title: 'Komputer Tidak Menyala! ❌',
+        titleClass: 'error',
+        text: `<strong>STATUS: SALAH (Ada Komponen Tidak Cocok)</strong><br><br>Semua 5 slot sudah terisi, tetapi <strong>komputer gagal menyala</strong> karena masalah berikut:<br><br><div style="text-align:left;font-size:12px;line-height:1.55;background:#fef2f2;border:1.5px solid #fecaca;padding:10px 14px;border-radius:8px;color:#991b1b;max-height:170px;overflow-y:auto;">${errors.join('<br><br>')}</div><br>Silakan tarik komponen yang tidak cocok kembali ke rak dan pasang komponen yang sesuai spesifikasi motherboard!`,
+        actions: [
+          { text: 'Periksa & Pasang Ulang', primary: true, onClick: closeGameModal }
+        ]
+      });
+    }, 300);
+  }
+}
+
+// ==================== MISI 2: SAKELAR BINER 8-BIT ====================
+
+const BINARY_WEIGHTS = [128, 64, 32, 16, 8, 4, 2, 1];
+
+function renderBinarySwitches() {
+  const row = document.getElementById('binary-switches-row');
+  if (!row) return;
+
+  row.innerHTML = '';
+  BINARY_WEIGHTS.forEach((weight, idx) => {
+    const isOn = computerGame.m2.bits[idx] === 1;
+    const col = document.createElement('div');
+    col.className = 'binary-bit-col';
+    col.style.cssText = `
+      background: ${isOn ? '#e0f7fa' : '#f8fafc'};
+      border: 2px solid ${isOn ? '#00ACC1' : '#cbd5e1'};
+      border-radius: 12px;
+      padding: 10px 4px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s;
+    `;
+    col.onclick = () => toggleBit(idx);
+
+    col.innerHTML = `
+      <div style="font-size:26px;filter:drop-shadow(0 2px 4px rgba(0,0,0,0.1));">${isOn ? '💡' : '⚫'}</div>
+      <div style="font-size:18px;font-weight:800;color:${isOn ? '#006064' : '#64748b'};margin:4px 0;">${isOn ? '1' : '0'}</div>
+      <div style="font-size:11px;font-weight:700;color:${isOn ? '#00838f' : '#94a3b8'};background:${isOn ? '#b2ebf2' : '#e2e8f0'};padding:2px 4px;border-radius:6px;">Bobot ${weight}</div>
+      <button style="margin-top:6px;font-size:11px;padding:3px 8px;border-radius:6px;border:none;background:${isOn ? '#00ACC1' : '#cbd5e1'};color:#fff;font-weight:700;cursor:pointer;">
+        ${isOn ? 'ON' : 'OFF'}
+      </button>
+    `;
+
+    row.appendChild(col);
+  });
+}
+
+function toggleBit(idx) {
+  computerGame.m2.bits[idx] = computerGame.m2.bits[idx] === 1 ? 0 : 1;
+  playSynthSound('click');
+  renderBinarySwitches();
+  updateBinaryDisplay();
+}
+
+function updateBinaryDisplay() {
+  let sum = 0;
+  const terms = [];
+
+  BINARY_WEIGHTS.forEach((w, idx) => {
+    if (computerGame.m2.bits[idx] === 1) {
+      sum += w;
+      terms.push(w);
+    }
+  });
+
+  const formulaEl = document.getElementById('bin-calc-formula');
+  const decValEl = document.getElementById('bin-decimal-value');
+  const asciiValEl = document.getElementById('bin-ascii-value');
+
+  if (formulaEl) {
+    formulaEl.innerHTML = terms.length > 0 
+      ? `Kalkulasi: ${terms.join(' + ')} = <strong>${sum}</strong>`
+      : `Kalkulasi: Semua sakelar OFF = <strong>0</strong>`;
+  }
+
+  if (decValEl) decValEl.textContent = sum;
+  if (asciiValEl) {
+    if (sum >= 32 && sum <= 126) {
+      asciiValEl.textContent = `'${String.fromCharCode(sum)}'`;
+    } else if (sum === 0) {
+      asciiValEl.textContent = '[NUL]';
+    } else {
+      asciiValEl.textContent = `[Kode #${sum}]`;
+    }
+  }
+}
+
+function updateBinaryChallengeButtonsUI() {
+  const m2 = computerGame.m2;
+  if (!m2) return;
+
+  for (let i = 1; i <= 3; i++) {
+    const btn = document.getElementById(`btn-bin-ch-${i}`);
+    if (!btn) continue;
+    const isDone = m2.completed && m2.completed[i];
+    const isActive = m2.challengeIdx === i;
+
+    let label = '';
+    if (i === 1) label = 'Tantangan 1: 27';
+    else if (i === 2) label = "Tantangan 2: 75 ('K')";
+    else if (i === 3) label = 'Tantangan 3: 200';
+
+    btn.textContent = isDone ? `${label} ✅` : label;
+    if (isActive) {
+      btn.classList.add('active');
+      btn.style.background = '#00ACC1';
+      btn.style.color = '#ffffff';
+      btn.style.borderColor = '#00838f';
+    } else {
+      btn.classList.remove('active');
+      btn.style.background = isDone ? '#e0f2fe' : '';
+      btn.style.color = isDone ? '#0369a1' : '';
+      btn.style.borderColor = isDone ? '#7dd3fc' : '';
+    }
+  }
+
+  const statusEl = document.getElementById('bin-mission-status');
+  if (statusEl) {
+    const totalDone = Object.values(m2.completed || {}).filter(Boolean).length;
+    if (totalDone > 0) {
+      statusEl.innerHTML = `✅ <strong>Status: Misi 2 Tuntas!</strong> (${totalDone} dari 3 tantangan selesai dikerjakan — kamu bebas lanjut ke Misi 3 atau menyelesaikan tantangan lainnya).`;
+      statusEl.style.color = '#059669';
+    } else {
+      statusEl.innerHTML = `💡 <em>Kerjakan 1 tantangan untuk menyelesaikan Misi 2 (Tersedia 3 tantangan).</em>`;
+      statusEl.style.color = '#0288d1';
+    }
+  }
+}
+
+function switchBinaryChallenge(num) {
+  computerGame.m2.challengeIdx = num;
+  const challenge = computerGame.m2.challenges.find(c => c.id === num) || computerGame.m2.challenges[0];
+  const titleEl = document.getElementById('bin-target-title');
+  if (titleEl) titleEl.textContent = `${challenge.title}`;
+  updateBinaryChallengeButtonsUI();
+  playSynthSound('click');
+}
+
+function verifyBinarySolution() {
+  const challenge = computerGame.m2.challenges.find(c => c.id === computerGame.m2.challengeIdx) || computerGame.m2.challenges[0];
+  let sum = 0;
+  BINARY_WEIGHTS.forEach((w, idx) => {
+    if (computerGame.m2.bits[idx] === 1) sum += w;
+  });
+
+  if (sum === challenge.targetDec) {
+    playSynthSound('success');
+    spawnConfetti();
+
+    // Catat tantangan ini selesai
+    if (!computerGame.m2.completed) computerGame.m2.completed = {};
+    computerGame.m2.completed[challenge.id] = true;
+
+    // KETENTUAN USER: Dikerjakan 1 tantangan juga SUDAH DIANGGAP SELESAI
+    computerGame.stars[2] = 1;
+    if (computerGame.unlockedLevel < 3) computerGame.unlockedLevel = 3;
+    updateGameHUD();
+    updateBinaryChallengeButtonsUI();
+
+    const totalDone = Object.values(computerGame.m2.completed).filter(Boolean).length;
+    const actions = [];
+    const nextUncompleted = [1, 2, 3].find(id => !computerGame.m2.completed[id]);
+
+    if (nextUncompleted) {
+      const nextChallenge = computerGame.m2.challenges.find(c => c.id === nextUncompleted);
+      actions.push({
+        text: `Coba ${nextChallenge.title} 🎯`,
+        primary: true,
+        onClick: () => {
+          closeGameModal();
+          switchBinaryChallenge(nextUncompleted);
+        }
+      });
+      actions.push({
+        text: 'Lanjut ke Misi 3 (Kasus 1: Layar Gelap) ▶',
+        primary: false,
+        onClick: () => {
+          closeGameModal();
+          switchGameLevel(3);
+        }
+      });
+
+      showGameModal({
+        icon: '🎉',
+        title: 'Tepat Sekali! Kode Biner Valid!',
+        text: `Kombinasi biner yang kamu susun berhasil menghasilkan nilai desimal <strong>${sum}</strong> (${challenge.title})!<br><br>🌟 <strong>Misi 2 sudah dianggap selesai</strong> (karena 1 tantangan berhasil dituntaskan &amp; Misi 3 telah terbuka).<br>Kamu bebas mencoba tantangan berikutnya atau langsung melanjutkan ke Misi 3!`,
+        stars: `⭐ Misi 2 Tuntas (${totalDone}/3 Tantangan Diselesaikan)`,
+        actions: actions
+      });
+    } else {
+      actions.push({
+        text: 'Lanjut ke Misi 3 (Kasus 1: Layar Gelap) ▶',
+        primary: true,
+        onClick: () => {
+          closeGameModal();
+          switchGameLevel(3);
+        }
+      });
+
+      showGameModal({
+        icon: '🏆',
+        title: 'Luar Biasa! Semua 3 Tantangan Selesai!',
+        text: `Kamu berhasil menuntaskan <strong>seluruh 3 tantangan biner</strong> (Desimal 27, Huruf 'K', dan Desimal 200) dengan sempurna! Pemahamanmu mengenai sakelar transistor dan bit digital sangat mengesankan!`,
+        stars: '⭐⭐ Misi 2 Tuntas Sempurna (3/3)',
+        actions: actions
+      });
+    }
+  } else {
+    playSynthSound('error');
+    showGameModal({
+      icon: '💡',
+      title: 'Belum Sesuai',
+      text: `Nilai biner saat ini adalah <strong>${sum}</strong>, sedangkan target adalah <strong>${challenge.targetDec}</strong>.<br><br><em>Petunjuk: ${challenge.hint}</em>`,
+      actions: [{ text: 'Coba Lagi', primary: true, onClick: closeGameModal }]
+    });
+  }
+}
+
+// ==================== MISI 3: KASUS TEKNISI 1 (LAYAR GELAP & BEEP) ====================
+
+let beepAudioInterval = null;
+
+function toggleBeepSound() {
+  if (computerGame.m3.isBeeping) {
+    stopBeepSound();
+  } else {
+    startBeepSound();
+  }
+}
+
+function startBeepSound() {
+  computerGame.m3.isBeeping = true;
+  const btn = document.getElementById('btn-play-beep');
+  if (btn) {
+    btn.innerHTML = '⏹️ Hentikan Bunyi Beep';
+    btn.style.background = '#fecaca';
+  }
+  playMotherboardBeepPattern();
+  if (beepAudioInterval) clearInterval(beepAudioInterval);
+  beepAudioInterval = setInterval(playMotherboardBeepPattern, 1800);
+}
+
+function stopBeepSound() {
+  computerGame.m3.isBeeping = false;
+  if (beepAudioInterval) {
+    clearInterval(beepAudioInterval);
+    beepAudioInterval = null;
+  }
+  const btn = document.getElementById('btn-play-beep');
+  if (btn) {
+    btn.innerHTML = '🔊 Dengarkan Bunyi Beep Motherboard';
+    btn.style.background = '#fee2e2';
+  }
+}
+
+function playMotherboardBeepPattern() {
+  try {
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const now = ctx.currentTime;
+    for (let i = 0; i < 3; i++) {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(880, now + (i * 0.45));
+      gain.gain.setValueAtTime(0.18, now + (i * 0.45));
+      gain.gain.setValueAtTime(0.01, now + (i * 0.45) + 0.32);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now + (i * 0.45));
+      osc.stop(now + (i * 0.45) + 0.34);
+    }
+  } catch (e) {}
+}
+
+function toggleTroubleAction(stage, actIdx) {
+  const m = stage === 3 ? computerGame.m3 : computerGame.m4;
+  if (!m.selectedActions) m.selectedActions = [];
+
+  const foundIdx = m.selectedActions.indexOf(actIdx);
+  if (foundIdx > -1) {
+    m.selectedActions.splice(foundIdx, 1);
+  } else {
+    m.selectedActions.push(actIdx);
+  }
+
+  playSynthSound('click');
+
+  if (stage === 3) {
+    renderTroubleCase1UI();
+  } else {
+    renderTroubleCase2UI();
+  }
+}
+
+function renderTroubleCase1UI() {
+  const selected = computerGame.m3.selectedActions || [];
+  for (let i = 0; i < 6; i++) {
+    const card = document.getElementById(`btn-t3-act-${i}`);
+    const chk = document.getElementById(`chk-t3-${i}`);
+    const isSel = selected.includes(i);
+    if (card) card.classList.toggle('selected', isSel);
+    if (chk) chk.textContent = isSel ? '✓' : '';
+  }
+
+  const feedback = document.getElementById('t3-feedback-text');
+  if (feedback) {
+    if (selected.length === 0) {
+      feedback.textContent = 'Centang tindakan yang tepat (Pilih beberapa), lalu jalankan SOP.';
+      feedback.style.color = '#64748b';
+    } else {
+      feedback.textContent = `${selected.length} tindakan SOP dipilih. Klik 'Jalankan SOP Perbaikan Hardware'.`;
+      feedback.style.color = '#0288d1';
+    }
+  }
+}
+
+function executeTroubleCase1() {
+  const selected = computerGame.m3.selectedActions || [];
+  if (selected.length === 0) {
+    playSynthSound('error');
+    showGameModal({
+      icon: '💡',
+      title: 'Pilih Prosedur SOP',
+      text: 'Centang minimal beberapa tindakan SOP perbaikan perangkat keras terlebih dahulu!',
+      actions: [{ text: 'Mengerti', primary: true, onClick: closeGameModal }]
+    });
+    return;
+  }
+
+  // Aksi 4: Heatsink CPU (Berbahaya)
+  // Aksi 5: Format SSD (Salah Sasaran)
+  const hasDangerCpu = selected.includes(4);
+  const hasWrongFormat = selected.includes(5);
+  const hasCleanRam = selected.includes(2);
+  const hasReseatRam = selected.includes(3);
+  const hasSafety = selected.includes(0);
+
+  if (hasDangerCpu) {
+    playSynthSound('error');
+    showGameModal({
+      icon: '⚠️',
+      title: 'Tindakan Berbahaya Terdeteksi',
+      titleClass: 'error',
+      text: '<strong>Jangan mencopot heatsink pendingin CPU!</strong><br><br>Komputer mengalami masalah kegagalan inisialisasi RAM (bunyi Beep POST), bukan kelebihan panas CPU. Melepas pendingin prosesor tanpa alasan berisiko merusak pasta termal dan soket CPU!',
+      actions: [{ text: 'Tinjau Ulang Prosedur', primary: true, onClick: closeGameModal }]
+    });
+    return;
+  }
+
+  if (hasWrongFormat) {
+    playSynthSound('error');
+    showGameModal({
+      icon: '❌',
+      title: 'Tindakan Salah Sasaran',
+      titleClass: 'error',
+      text: '<strong>Memformat SSD atau instal ulang OS tidak menyelesaikan masalah!</strong><br><br>Komputer bahkan belum berhasil melewati tahap inisialisasi BIOS (<b>Power-On Self-Test</b>). Kerusakan ada pada kontak fisik RAM, bukan pada sistem operasi Windows atau data file!',
+      actions: [{ text: 'Tinjau Ulang Prosedur', primary: true, onClick: closeGameModal }]
+    });
+    return;
+  }
+
+  if (!hasCleanRam || !hasReseatRam) {
+    playSynthSound('error');
+    showGameModal({
+      icon: '💡',
+      title: 'Langkah Kunci Terlewat',
+      text: 'Prosedur kamu belum menyertakan langkah inti penanganan modul RAM!<br><br><em>Petunjuk: Bunyi Beep panjang berulang mengindikasikan konektor pin RAM kotor/teroksidasi. Pastikan kamu memilih tindakan membersihkan pin emas RAM dan memasangnya kembali hingga terkunci rapat.</em>',
+      actions: [{ text: 'Lengkapi Prosedur', primary: true, onClick: closeGameModal }]
+    });
+    return;
+  }
+
+  // Sukses! Prosedur SOP tepat dan aman
+  stopBeepSound();
+  playSynthSound('success');
+  spawnConfetti();
+  computerGame.stars[3] = 1;
+  if (computerGame.unlockedLevel < 4) computerGame.unlockedLevel = 4;
+  updateGameHUD();
+
+  const safetyNote = hasSafety ? 'Langkah keselamatan K3 mematikan arus listrik juga kamu jalankan dengan sangat disiplin!' : '';
+
+  showGameModal({
+    icon: '🎉',
+    title: 'SOP Teknisi Berhasil Dijalankan!',
+    text: `Luar biasa! Prosedur yang kamu susun 100% tepat dan profesional! ${safetyNote}<br><br>Setelah kotoran dan oksidasi pada pin emas RAM dibersihkan, modul terpasang kencang di slot DDR4. Saat tombol daya dinyalakan kembali, <strong>bunyi Beep motherboard langsung hilang dan layar monitor menampilkan BIOS secara normal</strong>!`,
+    stars: '⭐ Misi 3 Selesai!',
+    actions: [
+      { text: 'Lanjut ke Misi 4 (Kasus 2: Optimasi Multitasking) ▶', primary: true, onClick: () => { closeGameModal(); switchGameLevel(4); } }
+    ]
+  });
+}
+
+// ==================== MISI 4: KASUS TEKNISI 2 (MEMORI PENUH & KINERJA) ====================
+
+function renderTroubleCase2UI() {
+  const selected = computerGame.m4.selectedActions || [];
+  for (let i = 0; i < 6; i++) {
+    const card = document.getElementById(`btn-t4-act-${i}`);
+    const chk = document.getElementById(`chk-t4-${i}`);
+    const isSel = selected.includes(i);
+    if (card) card.classList.toggle('selected', isSel);
+    if (chk) chk.textContent = isSel ? '✓' : '';
+  }
+
+  const feedback = document.getElementById('t4-feedback-text');
+  if (feedback) {
+    if (selected.length === 0) {
+      feedback.textContent = 'Centang paket solusi yang tepat (Pilih beberapa), lalu terapkan.';
+      feedback.style.color = '#64748b';
+    } else {
+      feedback.textContent = `${selected.length} langkah solusi dipilih. Klik 'Terapkan Paket Optimasi Kinerja'.`;
+      feedback.style.color = '#0288d1';
+    }
+  }
+}
+
+function executeTroubleCase2() {
+  const selected = computerGame.m4.selectedActions || [];
+  if (selected.length === 0) {
+    playSynthSound('error');
+    showGameModal({
+      icon: '💡',
+      title: 'Pilih Paket Solusi',
+      text: 'Centang minimal beberapa tindakan optimasi kinerja multitasking terlebih dahulu!',
+      actions: [{ text: 'Mengerti', primary: true, onClick: closeGameModal }]
+    });
+    return;
+  }
+
+  const hasDeleteSsd = selected.includes(3);
+  const hasBuyCpu = selected.includes(4);
+  const hasBuyMonitor = selected.includes(5);
+  const hasEndTask = selected.includes(0);
+  const hasStartup = selected.includes(1);
+  const hasUpgradeRam = selected.includes(2);
+
+  if (hasDeleteSsd) {
+    playSynthSound('error');
+    showGameModal({
+      icon: '❌',
+      title: 'Tindakan Keliru & Berisiko',
+      titleClass: 'error',
+      text: '<strong>Menghapus dokumen di SSD adalah tindakan salah sasaran!</strong><br><br>Perhatikan data Task Manager: ruang kosong SSD (C:) masih <strong>320 GB Bebas</strong>. Yang kehabisan ruang adalah <strong>Memori Kerja RAM (98%)</strong>, bukan media penyimpanan data!',
+      actions: [{ text: 'Tinjau Ulang Solusi', primary: true, onClick: closeGameModal }]
+    });
+    return;
+  }
+
+  if (hasBuyCpu) {
+    playSynthSound('error');
+    showGameModal({
+      icon: '💸',
+      title: 'Pemborosan / Salah Sasaran',
+      titleClass: 'error',
+      text: '<strong>Mengganti CPU tidak akan mengatasi masalah ini!</strong><br><br>Penggunaan CPU saat ini hanya <strong>24% (sangat santai)</strong>. Prosesor tidak mengalami kelebihan beban (<b>bottleneck</b>). Yang macet adalah antrean memori kerja RAM!',
+      actions: [{ text: 'Tinjau Ulang Solusi', primary: true, onClick: closeGameModal }]
+    });
+    return;
+  }
+
+  if (hasBuyMonitor) {
+    playSynthSound('error');
+    showGameModal({
+      icon: '📺',
+      title: 'Solusi Tidak Berhubungan',
+      titleClass: 'error',
+      text: 'Monitor adalah peranti keluaran (<b>output visual</b>), bukan memori kerja komputer. Mengganti monitor tidak menambah kapasitas RAM.',
+      actions: [{ text: 'Tinjau Ulang Solusi', primary: true, onClick: closeGameModal }]
+    });
+    return;
+  }
+
+  // Harus memilih minimal 2 dari 3 solusi yang benar (End Task, Startup, Upgrade RAM)
+  const correctCount = (hasEndTask ? 1 : 0) + (hasStartup ? 1 : 0) + (hasUpgradeRam ? 1 : 0);
+  if (correctCount < 2) {
+    playSynthSound('error');
+    showGameModal({
+      icon: '💡',
+      title: 'Solusi Belum Lengkap',
+      text: 'Pilihlah kombinasi solusi yang komprehensif! Setidaknya gabungkan solusi instan (<b>End Task</b>) dengan solusi jangka panjang (<b>Kelola Startup Apps</b> atau <b>Upgrade RAM Fisik</b>).',
+      actions: [{ text: 'Lengkapi Pilihan', primary: true, onClick: closeGameModal }]
+    });
+    return;
+  }
+
+  // Sukses! Animasi Task Manager pulih
+  playSynthSound('victory');
+  spawnConfetti();
+
+  const ramBar = document.getElementById('t4-ram-bar');
+  const ramVal = document.getElementById('t4-ram-val');
+  const warnBanner = document.getElementById('t4-warning-banner');
+
+  if (ramBar) {
+    ramBar.style.width = '32%';
+    ramBar.className = 'taskmgr-bar-fill safe';
+  }
+  if (ramVal) {
+    ramVal.textContent = '32% (5.1 GB / 16 GB - Lancar Mulus)';
+    ramVal.style.color = '#10b981';
+  }
+  if (warnBanner) {
+    warnBanner.style.background = 'rgba(16, 185, 129, 0.18)';
+    warnBanner.style.borderColor = '#10b981';
+    warnBanner.style.color = '#6ee7b7';
+    warnBanner.innerHTML = '<span>✅</span><span>Sistem Optimal: Ruang RAM Sangat Lega, Bebas Hambatan (No Lag)</span>';
+  }
+
+  computerGame.stars[4] = 1;
+  updateGameHUD();
+
+  showGameModal({
+    icon: '🏆',
+    title: 'Sempurna! Kamu Master Sistem Komputer!',
+    titleClass: 'victory',
+    stars: '⭐⭐⭐⭐ 4/4 BINTANG SEMPURNA!',
+    text: 'Analisis kamu 100% tepat! Kombinasi menutup proses rakus memori di Task Manager dan merencanakan upgrade RAM melipatgandakan performa kerja komputer!<br><br>Beban RAM langsung turun drastis ke <strong>32% (Aman)</strong> dan komputer kembali berjalan sangat mulus!<br><br>Selamat! Kamu telah menuntaskan seluruh 4 tantangan sistem komputer dengan predikat Ahli Perangkat Keras!',
+    actions: [
+      { text: 'Lanjut ke Latihan Evaluasi 📝', primary: true, onClick: () => { closeGameModal(); goToPage('latihan-intro'); } }
+    ]
+  });
+}
+
+function resetCurrentGameLevel() {
+  if (computerGame.currentLevel === 1) {
+    computerGame.m1.mounted = { cpu: null, ram: null, ssd: null, gpu: null, psu: null };
+    computerGame.m1.powered = false;
+    const postScreen = document.getElementById('post-screen');
+    if (postScreen) {
+      postScreen.innerHTML = `<div>[BIOS v2.4] Standby...</div><div style="color:#64748b;">Pesanan Spek: PC Lab Sekolah Modern (LGA 1700, DDR4, GPU PCIe, NVMe, PSU 550W).</div><div style="color:#64748b;margin-top:4px;">Pasang 5 komponen di motherboard, lalu uji tombol power.</div>`;
+    }
+    updateM1UI();
+  } else if (computerGame.currentLevel === 2) {
+    computerGame.m2.bits = [0, 0, 0, 0, 0, 0, 0, 0];
+    renderBinarySwitches();
+    updateBinaryDisplay();
+  } else if (computerGame.currentLevel === 3) {
+    stopBeepSound();
+    computerGame.m3.selectedActions = [];
+    renderTroubleCase1UI();
+  } else if (computerGame.currentLevel === 4) {
+    computerGame.m4.selectedActions = [];
+    renderTroubleCase2UI();
+    const ramBar = document.getElementById('t4-ram-bar');
+    const ramVal = document.getElementById('t4-ram-val');
+    const warnBanner = document.getElementById('t4-warning-banner');
+    if (ramBar) {
+      ramBar.style.width = '98%';
+      ramBar.className = 'taskmgr-bar-fill danger';
+    }
+    if (ramVal) {
+      ramVal.textContent = '98% (15.7 GB / 16 GB Terpakai) ⚠️';
+      ramVal.style.color = '#ef4444';
+    }
+    if (warnBanner) {
+      warnBanner.style.background = 'rgba(239, 68, 68, 0.18)';
+      warnBanner.style.borderColor = '#ef4444';
+      warnBanner.style.color = '#fca5a5';
+      warnBanner.innerHTML = '<span>⚠️</span><span>Notifikasi OS: "Out of Virtual Memory - Kinerja Sistem Terhenti (Freeze)"</span>';
+    }
+  }
+  playSynthSound('click');
+}
+
+function showGameHint() {
+  if (computerGame.currentLevel === 1) {
+    showGameModal({
+      icon: '💡',
+      title: 'Bantuan Misi 1',
+      text: 'Pilihlah 5 komponen yang modern dan sesuai spesifikasi motherboard: CPU Multi-Core Soket LGA 1700, RAM DDR4 DIMM, Kartu Grafis GPU PCIe x16, SSD M.2 NVMe, dan PSU 550W ATX. Hati-hati dengan komponen jebakan atau tidak kompatibel seperti Cooler braket AM3, RAM DDR2 notch beda, HDD IDE kabel pita, dan Adaptor HP 10W!',
+      actions: [{ text: 'Mengerti', primary: true, onClick: closeGameModal }]
+    });
+  } else if (computerGame.currentLevel === 2) {
+    const challenge = computerGame.m2.challenges.find(c => c.id === computerGame.m2.challengeIdx) || computerGame.m2.challenges[0];
+    showGameModal({
+      icon: '💡',
+      title: 'Bantuan Misi 2',
+      text: `Target: <strong>${challenge.targetDec}</strong>.<br><br>Petunjuk perhitungan: ${challenge.hint}`,
+      actions: [{ text: 'Mengerti', primary: true, onClick: closeGameModal }]
+    });
+  } else if (computerGame.currentLevel === 3) {
+    showGameModal({
+      icon: '💡',
+      title: 'Bantuan Misi 3',
+      text: 'Pahami sinyal diagnostik kode bunyi Beep pada tahap inisialisasi awal BIOS (POST). Bunyi Beep berulang umumnya mengindikasikan kegagalan komunikasi modul memori kerja (RAM). Jangan lupa utamakan prosedur keselamatan kerja (K3) listrik sebelum menyentuh komponen fisik.',
+      actions: [{ text: 'Mengerti', primary: true, onClick: closeGameModal }]
+    });
+  } else if (computerGame.currentLevel === 4) {
+    showGameModal({
+      icon: '💡',
+      title: 'Bantuan Misi 4',
+      text: 'Bandingkan ketiga indikator pada panel Task Manager: CPU, Memori (RAM), dan Penyimpanan SSD. Komponen manakah yang persentase bebannya paling kritis mendekati 100%? Tentukan tindakan yang segera membebaskan beban komponen tersebut dan opsi ekspansi fisiknya.',
+      actions: [{ text: 'Mengerti', primary: true, onClick: closeGameModal }]
+    });
+  }
+}
+
+function showGameModal(config) {
+  const modal = document.getElementById('game-modal');
+  const card = document.getElementById('game-modal-card');
+  if (!modal || !card) return;
+
+  let actionsHTML = '';
+  if (config.actions && config.actions.length > 0) {
+    config.actions.forEach((act, idx) => {
+      actionsHTML += `
+        <button class="btn ${act.primary ? 'btn-primary' : 'btn-secondary'}" id="modal-act-${idx}" style="font-size:14px;padding:8px 18px;border-radius:8px;">
+          ${act.text}
+        </button>
+      `;
+    });
+  } else {
+    actionsHTML = `<button class="btn btn-primary" onclick="closeGameModal()">Tutup</button>`;
+  }
+
+  card.innerHTML = `
+    <div class="gm-icon" style="font-size:48px;margin-bottom:8px;">${config.icon || '🎯'}</div>
+    <h3 class="gm-title ${config.titleClass || 'success'}" style="font-size:22px;margin-bottom:8px;">${config.title || ''}</h3>
+    <p class="gm-text" style="font-size:15px;line-height:1.5;margin-bottom:14px;color:#334155;">${config.text || ''}</p>
+    ${config.stars ? `<div class="gm-stars-row" style="font-size:18px;font-weight:800;color:#00ACC1;margin-bottom:14px;">${config.stars}</div>` : ''}
+    <div class="gm-actions" style="display:flex;gap:10px;justify-content:center;flex-wrap:wrap;">
+      ${actionsHTML}
+    </div>
+  `;
+
+  if (config.actions && config.actions.length > 0) {
+    config.actions.forEach((act, idx) => {
+      const btn = document.getElementById(`modal-act-${idx}`);
+      if (btn && act.onClick) btn.onclick = act.onClick;
+    });
+  }
+
+  modal.classList.add('show');
+}
+
+function closeGameModal() {
+  const modal = document.getElementById('game-modal');
+  if (modal) modal.classList.remove('show');
+}
+
+
+
+// ==================== CONFETTI ====================
+
+function spawnConfetti() {
+  const colors = ['#00ACC1', '#4DD0E1', '#ff6f61', '#ffd54f', '#81c784', '#ba68c8', '#4fc3f7'];
+  for (let i = 0; i < 70; i++) {
+    const piece = document.createElement('div');
+    piece.className = 'confetti-piece';
+    piece.style.left = Math.random() * 100 + 'vw';
+    piece.style.background = colors[Math.floor(Math.random() * colors.length)];
+    piece.style.animationDelay = Math.random() * 1.5 + 's';
+    piece.style.animationDuration = (2.2 + Math.random() * 2) + 's';
+    piece.style.width = (8 + Math.random() * 8) + 'px';
+    piece.style.height = (8 + Math.random() * 8) + 'px';
+    piece.style.borderRadius = Math.random() > 0.5 ? '50%' : '2px';
+    document.body.appendChild(piece);
+
+    setTimeout(() => piece.remove(), 4500);
+  }
+}
+
+
+// ==================== EVALUATION ====================
+
+const EVAL_ANSWERS = {
+  A1: 'B', A2: 'C', A3: 'B', A4: 'B', A5: 'C',
+  A6: 'B', A7: 'C', A8: 'C', A9: 'C', A10: 'B',
+  B1: 'benar', B2: 'salah', B3: 'benar', B4: 'salah', B5: 'benar',
+};
+
+const MATCH_ANSWERS = {
+  '1': 'b', '2': 'd', '3': 'e', '4': 'a', '5': 'c'
+};
+
+const SEQ_CORRECT_ORDER = [
+  'Tombol daya ditekan, Power Supply mengalirkan arus listrik ke motherboard',
+  'BIOS/UEFI pada ROM melakukan Power-On Self Test (POST) memeriksa kesiapan hardware',
+  'CPU memuat program bootloader sistem operasi dari media penyimpanan sekunder (SSD)',
+  'Berkas inti Sistem Operasi (OS Kernel) disalin dan dimuat ke dalam memori kerja RAM',
+  'Layar Desktop Sistem Operasi tampil dan komputer siap menerima input dari pengguna'
+];
+
+let evalUserAnswers = {};
+let matchState = { selectedLeft: null, pairs: {} };
+let evalSectionInited = { C: false, D: false };
+
+function startEval() {
+  evalUserAnswers = {};
+  matchState = { selectedLeft: null, pairs: {} };
+  evalSectionInited = { C: false, D: false };
+  currentShuffledRight = null;
+
+  // 1. Reset Bagian A (Pilihan Ganda): Hapus semua pilihan yang terpilih
+  document.querySelectorAll('#eval-section-A .mcq-option').forEach(o => {
+    o.classList.remove('selected');
+  });
+
+  // 2. Reset Bagian B (Benar / Salah): Hapus semua tombol yang terpilih
+  document.querySelectorAll('#eval-section-B .tf-btn').forEach(b => {
+    b.classList.remove('selected-benar', 'selected-salah');
+  });
+
+  // 3. Reset Bagian C (Menjodohkan): Kosongkan kontainer dan render ulang fresh
+  const leftCol = document.getElementById('match-left');
+  const rightCol = document.getElementById('match-right');
+  const svg = document.getElementById('match-svg-layer');
+  if (leftCol) leftCol.innerHTML = '';
+  if (rightCol) rightCol.innerHTML = '';
+  if (svg) svg.innerHTML = '';
+
+  // 4. Reset Bagian D (Mengurutkan): Kosongkan urutan dan render ulang fresh
+  const seqList = document.getElementById('seq-list');
+  if (seqList) seqList.innerHTML = '';
+
+  // 5. Reset Halaman Rekap & Progress Steps
+  const recapCard = document.getElementById('recap-card');
+  if (recapCard) recapCard.innerHTML = '';
+  const recapSection = document.getElementById('eval-section-recap');
+  if (recapSection) recapSection.classList.remove('active');
+
+  document.querySelectorAll('.eval-progress .step').forEach(s => {
+    s.classList.remove('active', 'done');
+  });
+
+  // 6. Mulai kembali dari Bagian A
+  nextEvalSection('A');
+}
+
+function nextEvalSection(sectionId) {
+  document.querySelectorAll('.eval-section').forEach(s => s.classList.remove('active'));
+  const section = document.getElementById('eval-section-' + sectionId);
+  if (section) section.classList.add('active');
+
+  const steps = ['A', 'B', 'C', 'D'];
+  document.querySelectorAll('.eval-progress .step').forEach(s => {
+    s.classList.remove('active', 'done');
+    const stepId = s.dataset.step;
+    const stepIdx = steps.indexOf(stepId);
+    const currentIdx = steps.indexOf(sectionId);
+    if (stepIdx < currentIdx) s.classList.add('done');
+    if (stepIdx === currentIdx) s.classList.add('active');
+  });
+
+  if (sectionId === 'C') {
+    if (!evalSectionInited.C) {
+      initMatchSection();
+    } else {
+      setTimeout(drawMatchLines, 50);
+    }
+  }
+  if (sectionId === 'D' && !evalSectionInited.D) initSeqSection();
+
+  const evalBox = document.getElementById('eval-box');
+  if (evalBox) {
+    evalBox.scrollTop = 0;
+    const scrollHint = document.getElementById('eval-floating-scroll-hint');
+    if (scrollHint) {
+      if (sectionId === 'A') {
+        scrollHint.classList.remove('hidden');
+      } else {
+        scrollHint.classList.add('hidden');
+      }
+    }
+  }
+}
+
+function scrollEvalBoxDown() {
+  const evalBox = document.getElementById('eval-box');
+  if (evalBox) {
+    evalBox.scrollBy({ top: 380, behavior: 'smooth' });
+  }
+}
+
+function selectMCQ(el) {
+  const question = el.closest('.mcq-question');
+  question.querySelectorAll('.mcq-option').forEach(o => o.classList.remove('selected'));
+  el.classList.add('selected');
+  evalUserAnswers[question.dataset.q] = el.dataset.val;
+}
+
+function selectTF(el) {
+  const question = el.closest('.tf-question');
+  question.querySelectorAll('.tf-btn').forEach(b => {
+    b.classList.remove('selected-benar', 'selected-salah');
+  });
+  el.classList.add(el.dataset.val === 'benar' ? 'selected-benar' : 'selected-salah');
+  evalUserAnswers[question.dataset.q] = el.dataset.val;
+}
+
+const MATCH_LEFT_DATA = [
+  { id: '1', text: 'CPU (Central Processing Unit)' },
+  { id: '2', text: 'ALU (Arithmetic Logic Unit)' },
+  { id: '3', text: 'RAM (Random Access Memory)' },
+  { id: '4', text: 'ROM / BIOS' },
+  { id: '5', text: 'Sistem Operasi (OS)' }
+];
+
+const MATCH_RIGHT_DATA = [
+  { id: 'a', text: 'Memori baca-saja yang menyimpan instruksi booting awal komputer' },
+  { id: 'b', text: 'Otak utama komputer pengendali seluruh pemrosesan instruksi' },
+  { id: 'c', text: 'Perangkat lunak pengendali seluruh sumber daya hardware dan aplikasi' },
+  { id: 'd', text: 'Komponen CPU yang khusus melakukan kalkulasi aritmatika dan logika' },
+  { id: 'e', text: 'Memori utama tempat program yang sedang berjalan disimpan sementara' }
+];
+
+const MATCH_PAIR_THEMES = {
+  '1': { color: '#00838f', bg: '#e0f7fa', border: '#00acc1', num: 1, label: '1' },
+  '2': { color: '#e65100', bg: '#fff3e0', border: '#ff9800', num: 2, label: '2' },
+  '3': { color: '#6a1b9a', bg: '#f3e5f5', border: '#ab47bc', num: 3, label: '3' },
+  '4': { color: '#2e7d32', bg: '#e8f5e9', border: '#4caf50', num: 4, label: '4' },
+  '5': { color: '#c2185b', bg: '#fce4ec', border: '#e91e63', num: 5, label: '5' }
+};
+
+let currentShuffledRight = null;
+
+function initMatchSection() {
+  evalSectionInited.C = true;
+  const leftCol = document.getElementById('match-left');
+  const rightCol = document.getElementById('match-right');
+  if (!leftCol || !rightCol) return;
+  leftCol.innerHTML = '';
+  rightCol.innerHTML = '';
+
+  if (!currentShuffledRight) {
+    currentShuffledRight = [...MATCH_RIGHT_DATA].sort(() => Math.random() - 0.5);
+  }
+
+  MATCH_LEFT_DATA.forEach(item => {
+    const el = document.createElement('div');
+    el.className = 'match-item';
+    el.id = `match-left-${item.id}`;
+    el.dataset.id = item.id;
+    el.dataset.side = 'left';
+    el.onclick = (e) => {
+      if (e.target.closest('.match-unpair-btn')) {
+        e.stopPropagation();
+        unpairMatchItem(item.id);
+        return;
+      }
+      onMatchClick('left', item.id, el);
+    };
+    leftCol.appendChild(el);
+  });
+
+  currentShuffledRight.forEach(item => {
+    const el = document.createElement('div');
+    el.className = 'match-item';
+    el.id = `match-right-${item.id}`;
+    el.dataset.id = item.id;
+    el.dataset.side = 'right';
+    el.onclick = (e) => {
+      if (e.target.closest('.match-unpair-btn')) {
+        e.stopPropagation();
+        const pairedLeft = Object.keys(matchState.pairs).find(k => matchState.pairs[k] === item.id);
+        if (pairedLeft) unpairMatchItem(pairedLeft);
+        return;
+      }
+      onMatchClick('right', item.id, el);
+    };
+    rightCol.appendChild(el);
+  });
+
+  renderMatchUI();
+}
+
+function renderMatchUI() {
+  // 1. Render Left items
+  MATCH_LEFT_DATA.forEach(item => {
+    const el = document.getElementById(`match-left-${item.id}`);
+    if (!el) return;
+    const isSelected = matchState.selectedLeft === item.id;
+    const pairedRight = matchState.pairs[item.id];
+    const theme = MATCH_PAIR_THEMES[item.id] || MATCH_PAIR_THEMES['1'];
+
+    el.className = 'match-item' + (isSelected ? ' selected' : '') + (pairedRight ? ' matched' : '');
+    if (pairedRight) {
+      el.style.setProperty('--pair-color', theme.color);
+      el.style.setProperty('--pair-bg', theme.bg);
+      el.style.setProperty('--pair-border', theme.border);
+      el.innerHTML = `
+        <div class="match-item-content">
+          <span>${item.id}. ${item.text}</span>
+        </div>
+        <span class="match-badge">🔗 #${theme.label} <span class="match-unpair-btn" title="Batalkan pasangan">✕</span></span>
+        <span class="match-anchor-dot"></span>
+      `;
+    } else {
+      el.removeAttribute('style');
+      el.innerHTML = `
+        <div class="match-item-content">
+          <span>${item.id}. ${item.text}</span>
+        </div>
+        <span class="match-anchor-dot"></span>
+      `;
+    }
+  });
+
+  // 2. Render Right items
+  if (currentShuffledRight) {
+    currentShuffledRight.forEach(item => {
+      const el = document.getElementById(`match-right-${item.id}`);
+      if (!el) return;
+      const pairedLeft = Object.keys(matchState.pairs).find(k => matchState.pairs[k] === item.id);
+      const theme = pairedLeft ? (MATCH_PAIR_THEMES[pairedLeft] || MATCH_PAIR_THEMES['1']) : null;
+
+      el.className = 'match-item' + (pairedLeft ? ' matched' : '');
+      if (pairedLeft && theme) {
+        el.style.setProperty('--pair-color', theme.color);
+        el.style.setProperty('--pair-bg', theme.bg);
+        el.style.setProperty('--pair-border', theme.border);
+        el.innerHTML = `
+          <span class="match-anchor-dot"></span>
+          <span class="match-badge">🔗 #${theme.label} <span class="match-unpair-btn" title="Batalkan pasangan">✕</span></span>
+          <div class="match-item-content">
+            <span>${item.id}. ${item.text}</span>
+          </div>
+        `;
+      } else {
+        el.removeAttribute('style');
+        el.innerHTML = `
+          <span class="match-anchor-dot"></span>
+          <div class="match-item-content">
+            <span>${item.id}. ${item.text}</span>
+          </div>
+        `;
+      }
+    });
+  }
+
+  // 3. Draw dynamic connecting SVG lines
+  setTimeout(drawMatchLines, 20);
+}
+
+function onMatchClick(side, id, el) {
+  if (side === 'left') {
+    if (matchState.pairs[id]) {
+      // User clicked an already matched left item -> unpair it and make it selected to allow quick correction
+      delete matchState.pairs[id];
+      matchState.selectedLeft = id;
+      playSynthSound('click');
+      renderMatchUI();
+      return;
+    }
+
+    if (matchState.selectedLeft === id) {
+      // Toggle off / cancel selection
+      matchState.selectedLeft = null;
+      playSynthSound('click');
+      renderMatchUI();
+      return;
+    }
+
+    // Select this left item
+    matchState.selectedLeft = id;
+    playSynthSound('click');
+    renderMatchUI();
+
+  } else if (side === 'right') {
+    if (matchState.selectedLeft !== null) {
+      const leftId = matchState.selectedLeft;
+
+      // If right item was already paired with another left item, unpair that other left item
+      const existingLeft = Object.keys(matchState.pairs).find(k => matchState.pairs[k] === id);
+      if (existingLeft && existingLeft !== leftId) {
+        delete matchState.pairs[existingLeft];
+      }
+
+      // Pair selected left with this right
+      matchState.pairs[leftId] = id;
+      matchState.selectedLeft = null;
+      playSynthSound('packet_arrive');
+      renderMatchUI();
+
+    } else {
+      // User clicked a right item without any left item selected
+      const pairedLeft = Object.keys(matchState.pairs).find(k => matchState.pairs[k] === id);
+      if (pairedLeft) {
+        // Unpair this match
+        delete matchState.pairs[pairedLeft];
+        playSynthSound('click');
+        renderMatchUI();
+      }
+    }
+  }
+}
+
+function unpairMatchItem(leftId) {
+  if (matchState.pairs[leftId]) {
+    delete matchState.pairs[leftId];
+    playSynthSound('click');
+    renderMatchUI();
+  }
+}
+
+function resetMatchPairs() {
+  matchState = { selectedLeft: null, pairs: {} };
+  playSynthSound('click');
+  renderMatchUI();
+}
+
+function drawMatchLines() {
+  const container = document.getElementById('match-container');
+  const svg = document.getElementById('match-svg-layer');
+  if (!container || !svg) return;
+
+  svg.innerHTML = '';
+  const containerRect = container.getBoundingClientRect();
+  if (containerRect.width === 0 || containerRect.height === 0) return;
+
+  const scaleX = (containerRect.width > 0 && container.offsetWidth > 0) ? (containerRect.width / container.offsetWidth) : 1;
+  const scaleY = (containerRect.height > 0 && container.offsetHeight > 0) ? (containerRect.height / container.offsetHeight) : 1;
+
+  Object.entries(matchState.pairs).forEach(([leftId, rightId]) => {
+    const leftEl = document.getElementById(`match-left-${leftId}`);
+    const rightEl = document.getElementById(`match-right-${rightId}`);
+    if (!leftEl || !rightEl) return;
+
+    const leftRect = leftEl.getBoundingClientRect();
+    const rightRect = rightEl.getBoundingClientRect();
+
+    const x1 = (leftRect.right - containerRect.left) / scaleX;
+    const y1 = (leftRect.top + leftRect.height / 2 - containerRect.top) / scaleY;
+    const x2 = (rightRect.left - containerRect.left) / scaleX;
+    const y2 = (rightRect.top + rightRect.height / 2 - containerRect.top) / scaleY;
+
+    const theme = MATCH_PAIR_THEMES[leftId] || MATCH_PAIR_THEMES['1'];
+    const midX = (x1 + x2) / 2;
+
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', `M ${x1},${y1} C ${midX},${y1} ${midX},${y2} ${x2},${y2}`);
+    path.setAttribute('stroke', theme.border);
+    path.setAttribute('stroke-width', '4');
+    path.setAttribute('stroke-dasharray', '8 4');
+    path.setAttribute('stroke-linecap', 'round');
+    path.setAttribute('fill', 'none');
+    svg.appendChild(path);
+
+    // Endpoint dots
+    const c1 = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    c1.setAttribute('cx', x1);
+    c1.setAttribute('cy', y1);
+    c1.setAttribute('r', '5');
+    c1.setAttribute('fill', theme.color);
+    svg.appendChild(c1);
+
+    const c2 = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    c2.setAttribute('cx', x2);
+    c2.setAttribute('cy', y2);
+    c2.setAttribute('r', '5');
+    c2.setAttribute('fill', theme.color);
+    svg.appendChild(c2);
+  });
+}
+
+function initSeqSection() {
+  evalSectionInited.D = true;
+  const list = document.getElementById('seq-list');
+  list.innerHTML = '';
+
+  const shuffled = SEQ_CORRECT_ORDER.map((text, i) => ({ text, correctIdx: i }))
+    .sort(() => Math.random() - 0.5);
+
+  shuffled.forEach((item, i) => {
+    const el = document.createElement('div');
+    el.className = 'seq-item';
+    el.draggable = true;
+    el.dataset.correctIdx = item.correctIdx;
+    el.innerHTML = `<span class="seq-grip">⠿</span><span class="seq-num">${i + 1}</span><span>${item.text}</span>`;
+
+    el.addEventListener('dragstart', onSeqDragStart);
+    el.addEventListener('dragover', onSeqDragOver);
+    el.addEventListener('dragenter', onSeqDragEnter);
+    el.addEventListener('dragleave', onSeqDragLeave);
+    el.addEventListener('drop', onSeqDrop);
+    el.addEventListener('dragend', onSeqDragEnd);
+
+    el.addEventListener('touchstart', onSeqTouchStart, { passive: false });
+    el.addEventListener('touchmove', onSeqTouchMove, { passive: false });
+    el.addEventListener('touchend', onSeqTouchEnd);
+
+    list.appendChild(el);
+  });
+}
+
+let seqDragEl = null;
+
+function onSeqDragStart(e) {
+  seqDragEl = e.currentTarget;
+  e.currentTarget.classList.add('dragging');
+  e.dataTransfer.effectAllowed = 'move';
+}
+
+function onSeqDragOver(e) { e.preventDefault(); }
+
+function onSeqDragEnter(e) {
+  e.preventDefault();
+  if (e.currentTarget !== seqDragEl) e.currentTarget.classList.add('over');
+}
+
+function onSeqDragLeave(e) { e.currentTarget.classList.remove('over'); }
+
+function onSeqDrop(e) {
+  e.preventDefault();
+  const target = e.currentTarget;
+  target.classList.remove('over');
+  if (!seqDragEl || target === seqDragEl) return;
+
+  const list = document.getElementById('seq-list');
+  const items = [...list.children];
+  const fromIdx = items.indexOf(seqDragEl);
+  const toIdx = items.indexOf(target);
+
+  if (fromIdx < toIdx) {
+    list.insertBefore(seqDragEl, target.nextSibling);
+  } else {
+    list.insertBefore(seqDragEl, target);
+  }
+
+  updateSeqNumbers();
+}
+
+function onSeqDragEnd(e) {
+  e.currentTarget.classList.remove('dragging');
+  document.querySelectorAll('.seq-item').forEach(i => i.classList.remove('over'));
+  seqDragEl = null;
+}
+
+let seqTouchEl = null;
+let seqTouchClone = null;
+
+function onSeqTouchStart(e) {
+  seqTouchEl = e.currentTarget;
+  e.preventDefault();
+  seqTouchClone = seqTouchEl.cloneNode(true);
+  seqTouchClone.style.position = 'fixed';
+  seqTouchClone.style.zIndex = '1000';
+  seqTouchClone.style.opacity = '0.85';
+  seqTouchClone.style.pointerEvents = 'none';
+  seqTouchClone.style.width = seqTouchEl.offsetWidth + 'px';
+  document.body.appendChild(seqTouchClone);
+  const touch = e.touches[0];
+  seqTouchClone.style.left = (touch.clientX - seqTouchEl.offsetWidth / 2) + 'px';
+  seqTouchClone.style.top = (touch.clientY - 25) + 'px';
+  seqTouchEl.classList.add('dragging');
+}
+
+function onSeqTouchMove(e) {
+  if (!seqTouchClone) return;
+  e.preventDefault();
+  const touch = e.touches[0];
+  seqTouchClone.style.left = (touch.clientX - seqTouchClone.offsetWidth / 2) + 'px';
+  seqTouchClone.style.top = (touch.clientY - 25) + 'px';
+
+  document.querySelectorAll('.seq-item').forEach(i => i.classList.remove('over'));
+  const elem = document.elementFromPoint(touch.clientX, touch.clientY);
+  if (elem) {
+    const item = elem.closest('.seq-item');
+    if (item && item !== seqTouchEl) item.classList.add('over');
+  }
+}
+
+function onSeqTouchEnd(e) {
+  if (!seqTouchClone || !seqTouchEl) return;
+  const touch = e.changedTouches[0];
+  const elem = document.elementFromPoint(touch.clientX, touch.clientY);
+
+  document.body.removeChild(seqTouchClone);
+  seqTouchClone = null;
+  seqTouchEl.classList.remove('dragging');
+
+  if (elem) {
+    const target = elem.closest('.seq-item');
+    if (target && target !== seqTouchEl) {
+      const list = document.getElementById('seq-list');
+      const items = [...list.children];
+      const fromIdx = items.indexOf(seqTouchEl);
+      const toIdx = items.indexOf(target);
+      if (fromIdx < toIdx) {
+        list.insertBefore(seqTouchEl, target.nextSibling);
+      } else {
+        list.insertBefore(seqTouchEl, target);
+      }
+      updateSeqNumbers();
+    }
+  }
+
+  document.querySelectorAll('.seq-item').forEach(i => i.classList.remove('over'));
+  seqTouchEl = null;
+}
+
+function updateSeqNumbers() {
+  const items = document.querySelectorAll('#seq-list .seq-item');
+  items.forEach((item, i) => {
+    item.querySelector('.seq-num').textContent = i + 1;
+  });
+}
+
+
+// ==================== SUBMIT EVALUATION ====================
+
+function submitEval() {
+  const scores = { A: 0, B: 0, C: 0, D: 0 };
+
+  for (let i = 1; i <= 10; i++) {
+    const key = 'A' + i;
+    if (evalUserAnswers[key] === EVAL_ANSWERS[key]) scores.A++;
+  }
+
+  for (let i = 1; i <= 5; i++) {
+    const key = 'B' + i;
+    if (evalUserAnswers[key] === EVAL_ANSWERS[key]) scores.B++;
+  }
+
+  for (const [left, right] of Object.entries(matchState.pairs)) {
+    if (MATCH_ANSWERS[left] === right) scores.C++;
+  }
+
+  const seqItems = document.querySelectorAll('#seq-list .seq-item');
+  seqItems.forEach((item, i) => {
+    if (parseInt(item.dataset.correctIdx) === i) scores.D++;
+  });
+
+  const total = scores.A + scores.B + scores.C + scores.D;
+  const maxTotal = 25;
+  const percentage = Math.round((total / maxTotal) * 100);
+
+  let msgClass, msgText;
+  if (percentage >= 90) {
+    msgClass = 'excellent';
+    msgText = 'Luar biasa! Kamu benar-benar Ahli Sistem Komputer sejati! 🏆';
+  } else if (percentage >= 60) {
+    msgClass = 'good';
+    msgText = 'Bagus! Beberapa konsep sudah kamu kuasai, coba ulangi bagian yang masih salah.';
+  } else {
+    msgClass = 'tryagain';
+    msgText = 'Yuk, pelajari lagi materi pembelajaran sebelum mencoba evaluasi lagi!';
+  }
+
+  const recapCard = document.getElementById('recap-card');
+  recapCard.innerHTML = `
+    <div style="font-size:56px;margin-bottom:8px;">📊</div>
+    <h2 style="font-family:var(--font-heading);font-size:28px;color:var(--teal-dark);margin-bottom:6px;">Hasil Rekap Evaluasi</h2>
+    <div class="recap-score">${percentage}%</div>
+    <p style="font-size:18px;color:var(--text-body);margin-bottom:12px;">Total Skor: <strong>${total}</strong> / ${maxTotal} Poin</p>
+
+    <div class="recap-details">
+      <span class="recap-badge a">Bagian A: ${scores.A}/10</span>
+      <span class="recap-badge b">Bagian B: ${scores.B}/5</span>
+      <span class="recap-badge c">Bagian C: ${scores.C}/5</span>
+      <span class="recap-badge d">Bagian D: ${scores.D}/5</span>
+    </div>
+
+    <div class="recap-msg ${msgClass}">${msgText}</div>
+
+    <div style="margin-top:24px;display:flex;gap:14px;justify-content:center;flex-wrap:wrap;">
+      <button class="btn btn-secondary" onclick="startEval();nextEvalSection('A')">🔄 Ulangi Latihan</button>
+      <button class="btn btn-primary" onclick="goToPage('rangkuman')">📋 Ke Rangkuman</button>
+    </div>
+  `;
+
+  document.querySelectorAll('.eval-section').forEach(s => s.classList.remove('active'));
+  document.getElementById('eval-section-recap').classList.add('active');
+  document.querySelectorAll('.eval-progress .step').forEach(s => s.classList.add('done'));
+
+  if (percentage >= 60) spawnConfetti();
+}
+
+
+// ==================== MOBILE & TABLET TOUCH SWIPE NAVIGATION ====================
+
+function initSwipeNavigation() {
+  let startX = 0;
+  let startY = 0;
+  let startTime = 0;
+  let tracking = false;
+  let directionLocked = false; // once locked, won't change
+  let isHorizontal = false;
+
+  const MIN_DISTANCE = 45;  // px — minimum swipe distance
+  const LOCK_THRESHOLD = 8; // px — distance to lock direction
+
+  // Elements that should NOT trigger page swipe
+  function isInteractive(el) {
+    if (!el || !(el instanceof Element)) return false;
+
+    // Never trigger swipe on interactive pages (simulation/games/matching)
+    if (['permainan', 'tarik-jawaban', 'evaluasi'].includes(currentPage)) {
+      return true;
+    }
+
+    // Active modal overlay
+    const modal = document.querySelector('.game-modal.show, #game-modal.show');
+    if (modal && modal.contains(el)) return true;
+
+    return !!el.closest([
+      'video', 'audio', 'canvas', 'input', 'textarea', 'select', 'button',
+      '.match-p8-item', '.match-item', '.match-col', '.match-column',
+      '.seq-item', '.node-item', '.router-node',
+      '.game-canvas', '#game-canvas', '.game-controls',
+      '.packet-btn', '.route-btn',
+      '.video-container', '.video-controls',
+      '.qc-panel', '#quick-controls-panel',
+      '#page-permainan', '.game-stage-wrapper', '.motherboard-workspace-card',
+      '.inv-comp-card', '.mb-physical-slot', '[draggable="true"]',
+      '.no-swipe', '[data-no-swipe]'
+    ].join(','));
+  }
+
+  // --- TOUCH EVENTS ONLY (Mobile & Tablet) ---
+  // Catatan: Navigasi drag mouse pada desktop dinonaktifkan agar tidak berbenturan
+  // dengan fitur Drag & Drop komponen, seleksi teks, maupun klik interaktif.
+  document.addEventListener('touchstart', function(e) {
+    if (e.touches.length !== 1) return;
+    if (isInteractive(e.target)) { tracking = false; return; }
+
+    const t = e.touches[0];
+    startX = t.clientX;
+    startY = t.clientY;
+    startTime = Date.now();
+    tracking = true;
+    directionLocked = false;
+    isHorizontal = false;
+  }, { passive: true });
+
+  document.addEventListener('touchmove', function(e) {
+    if (!tracking || e.touches.length !== 1) return;
+
+    const t = e.touches[0];
+    const dx = t.clientX - startX;
+    const dy = t.clientY - startY;
+    const ax = Math.abs(dx);
+    const ay = Math.abs(dy);
+
+    // Lock direction once finger has moved enough
+    if (!directionLocked && (ax > LOCK_THRESHOLD || ay > LOCK_THRESHOLD)) {
+      directionLocked = true;
+      isHorizontal = ax > ay;
+    }
+
+    // If horizontal, prevent browser scroll/navigation
+    if (directionLocked && isHorizontal && e.cancelable) {
+      e.preventDefault();
+    }
+  }, { passive: false });
+
+  document.addEventListener('touchend', function(e) {
+    if (!tracking) return;
+    tracking = false;
+
+    // Only act on horizontal swipes
+    if (!directionLocked || !isHorizontal) return;
+
+    const t = e.changedTouches[0];
+    const dx = t.clientX - startX;
+    const elapsed = Date.now() - startTime;
+
+    if (elapsed > 2000) return;
+    if (Math.abs(dx) < MIN_DISTANCE) return;
+
+    if (dx < 0) {
+      navNext();  // swipe left → next
+    } else {
+      navPrev();  // swipe right → prev
+    }
+  }, { passive: true });
+
+  document.addEventListener('touchcancel', function() {
+    tracking = false;
+  }, { passive: true });
+}
+
+
+// ==================== INITIALIZATION ====================
+
+document.addEventListener('DOMContentLoaded', function() {
+  applyConfig();
+  setAppZoom(currentZoom);
+  setAppFontScale(currentFontScale);
+  goToPage('cover');
+  initSwipeNavigation();
+
+  window.addEventListener('resize', () => {
+    if (currentPage === 'tarik-jawaban') {
+      drawMatchP8Lines();
+    }
+    const secC = document.getElementById('eval-section-C');
+    if (secC && secC.classList.contains('active')) {
+      drawMatchLines();
+    }
+  });
+
+  const tarikBox = document.getElementById('content-tarik-jawaban');
+  if (tarikBox) {
+    tarikBox.addEventListener('scroll', () => {
+      if (currentPage === 'tarik-jawaban') {
+        drawMatchP8Lines();
+      }
+    });
+  }
+
+  const evalBox = document.getElementById('eval-box');
+  if (evalBox) {
+    evalBox.addEventListener('scroll', () => {
+      const secC = document.getElementById('eval-section-C');
+      if (secC && secC.classList.contains('active')) {
+        drawMatchLines();
+      }
+
+      const scrollHint = document.getElementById('eval-floating-scroll-hint');
+      if (scrollHint) {
+        const secA = document.getElementById('eval-section-A');
+        const isSecA = secA && secA.classList.contains('active');
+        if (!isSecA || evalBox.scrollTop > 90 || (evalBox.scrollTop + evalBox.clientHeight >= evalBox.scrollHeight - 50)) {
+          scrollHint.classList.add('hidden');
+        } else {
+          scrollHint.classList.remove('hidden');
+        }
+      }
+    });
+  }
+
+  // Unified click handler for top & bottom compound navigations
+  document.addEventListener('click', function(e) {
+    const navTop = e.target.closest('.nav-top');
+    if (navTop) {
+      const btn = navTop.querySelector('.nav-circle');
+      if (btn && e.target !== btn && !btn.contains(e.target)) {
+        btn.click();
+      }
+    }
+
+    const navMateri = e.target.closest('.nav-btn-materi');
+    if (navMateri) {
+      const btn = navMateri.querySelector('.nav-circle');
+      if (btn && e.target !== btn && !btn.contains(e.target)) {
+        btn.click();
+      }
+    }
+
+    const leftCompound = e.target.closest('.nav-bottom.left.nav-materi-compound');
+    if (leftCompound && e.target === leftCompound) {
+      const arrow = leftCompound.querySelector('.nav-arrow');
+      if (arrow) arrow.click();
+      else navPrev();
+    }
+
+    const rightCompound = e.target.closest('.nav-bottom.right.nav-materi-compound');
+    if (rightCompound && e.target === rightCompound) {
+      const arrow = rightCompound.querySelector('.nav-arrow');
+      if (arrow) arrow.click();
+      else navNext();
+    }
+  });
+});
+
+// ==================== REFLEKSI BELAJAR ====================
+function simpanRefleksi() {
+  const input = document.getElementById('refleksi-input');
+  const status = document.getElementById('refleksi-status');
+  if (!input) return;
+  const val = input.value.trim();
+  if (val.length === 0) {
+    if (status) {
+      status.textContent = '⚠️ Tuliskan refleksimu dulu!';
+      status.style.color = '#dc2626';
+      status.style.display = 'block';
+    }
+    return;
+  }
+  try {
+    localStorage.setItem('mpi_sk_refleksi', val);
+  } catch (e) {}
+  if (status) {
+    status.textContent = '✓ Refleksimu tersimpan!';
+    status.style.color = '#16a34a';
+    status.style.display = 'block';
+    setTimeout(() => {
+      status.style.display = 'none';
+    }, 3500);
+  }
+}
+
+function loadRefleksi() {
+  const input = document.getElementById('refleksi-input');
+  if (!input) return;
+  try {
+    const saved = localStorage.getItem('mpi_sk_refleksi');
+    if (saved && !input.value) {
+      input.value = saved;
+    }
+  } catch (e) {}
+}
+
+function scrollToRefleksi() {
+  const box = document.getElementById('content-rangkuman');
+  const target = document.querySelector('#page-rangkuman .refleksi-box') || document.getElementById('refleksi-input');
+  if (target) {
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    setTimeout(() => {
+      const input = document.getElementById('refleksi-input');
+      if (input) {
+        input.focus();
+        input.style.borderColor = 'var(--teal)';
+        setTimeout(() => {
+          input.style.borderColor = '';
+        }, 1500);
+      }
+    }, 450);
+  } else if (box) {
+    box.scrollTo({ top: box.scrollHeight, behavior: 'smooth' });
+  }
+}
